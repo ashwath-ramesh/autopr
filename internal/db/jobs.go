@@ -251,6 +251,7 @@ type LLMSession struct {
 	LLMProvider  string
 	PromptHash   string
 	ResponseText string
+	PromptText   string
 	InputTokens  int
 	OutputTokens int
 	DurationMS   int
@@ -271,13 +272,13 @@ func (s *Store) CreateSession(ctx context.Context, jobID, step string, iteration
 	return res.LastInsertId()
 }
 
-func (s *Store) CompleteSession(ctx context.Context, sessionID int64, status, responseText, promptHash, jsonlPath, commitSHA, errMsg string, inputTokens, outputTokens, durationMS int) error {
+func (s *Store) CompleteSession(ctx context.Context, sessionID int64, status, responseText, promptText, promptHash, jsonlPath, commitSHA, errMsg string, inputTokens, outputTokens, durationMS int) error {
 	_, err := s.Writer.ExecContext(ctx, `
-UPDATE llm_sessions SET status = ?, response_text = ?, prompt_hash = ?, jsonl_path = ?,
+UPDATE llm_sessions SET status = ?, response_text = ?, prompt_text = ?, prompt_hash = ?, jsonl_path = ?,
                        commit_sha = ?, error_message = ?, input_tokens = ?, output_tokens = ?,
                        duration_ms = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE id = ?`,
-		status, responseText, promptHash, jsonlPath, commitSHA, errMsg, inputTokens, outputTokens, durationMS, sessionID)
+		status, responseText, promptText, promptHash, jsonlPath, commitSHA, errMsg, inputTokens, outputTokens, durationMS, sessionID)
 	if err != nil {
 		return fmt.Errorf("complete session %d: %w", sessionID, err)
 	}
@@ -361,7 +362,7 @@ FROM llm_sessions WHERE job_id = ? ORDER BY id ASC`
 func (s *Store) GetFullSession(ctx context.Context, sessionID int) (LLMSession, error) {
 	const q = `
 SELECT id, job_id, step, iteration, llm_provider,
-       COALESCE(prompt_hash,''), COALESCE(response_text,''),
+       COALESCE(prompt_hash,''), COALESCE(response_text,''), COALESCE(prompt_text,''),
        COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(duration_ms,0),
        COALESCE(jsonl_path,''), COALESCE(commit_sha,''), status,
        COALESCE(error_message,''), created_at, COALESCE(completed_at,'')
@@ -369,7 +370,7 @@ FROM llm_sessions WHERE id = ?`
 	var sess LLMSession
 	err := s.Reader.QueryRowContext(ctx, q, sessionID).Scan(
 		&sess.ID, &sess.JobID, &sess.Step, &sess.Iteration, &sess.LLMProvider,
-		&sess.PromptHash, &sess.ResponseText,
+		&sess.PromptHash, &sess.ResponseText, &sess.PromptText,
 		&sess.InputTokens, &sess.OutputTokens, &sess.DurationMS,
 		&sess.JSONLPath, &sess.CommitSHA, &sess.Status,
 		&sess.ErrorMessage, &sess.CreatedAt, &sess.CompletedAt,
