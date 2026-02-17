@@ -6,29 +6,39 @@ for human approval.
 
 ## How It Works
 
-```
-                              ┌─────────────┐
-  GitLab webhook ────────────>│             │
-  GitHub/Sentry sync loop ──>│  ap daemon   │──> clone repo, create branch
-                              │             │    plan → implement → review → test
-                              └──────┬──────┘
-                                     │
-                              ┌──────▼──────┐
-                              │   SQLite    │  jobs, sessions, artifacts
-                              └──────┬──────┘
-                                     │
-                              ┌──────▼──────┐
-                              │  LLM CLI    │  claude --print / codex --full-auto
-                              └─────────────┘
+```mermaid
+flowchart TD
+    subgraph Sources
+        GL[GitLab webhook]
+        GH[GitHub poll]
+        SE[Sentry poll]
+    end
+
+    GL & GH & SE --> D[ap daemon]
+    D --> DB[(SQLite)]
+    D --> LLM[LLM CLI<br/>claude --print / codex --full-auto]
+    D --> Git[Git<br/>clone, branch, push]
 ```
 
 **Pipeline per issue:**
 
+```mermaid
+flowchart LR
+    Plan --> Implement --> Review
+    Review -->|changes requested| Implement
+    Review -->|approved| Test
+    Test -->|failed| Implement
+    Test -->|pass + push| Ready
+    Ready -->|ap approve| Approved
+    Ready -->|auto_pr = true| Approved
+    Ready -->|ap reject| Rejected
+```
+
 1. **Plan** — LLM analyzes the issue and produces an implementation plan.
-2. **Implement** — LLM writes code in a git worktree following the plan.
+2. **Implement** — LLM writes code in a git worktree following the plan. A safety-net commit captures any uncommitted changes.
 3. **Code Review** — LLM reviews its own changes. If not approved, loops back to implement (up to `max_iterations`).
-4. **Test** — Runs the project's test command. On pass, pushes the branch.
-5. **Ready** — Waits for human `approve` / `reject` via CLI or TUI.
+4. **Test** — Runs the project's test command. On failure, loops back to implement with the test output so the LLM can fix it (up to `max_iterations`). On pass, pushes the branch.
+5. **Ready** — Waits for human `approve` / `reject` via CLI or TUI. With `auto_pr = true`, a PR is created automatically and the job moves straight to `approved`.
 
 ## Prerequisites
 
@@ -118,6 +128,7 @@ max_workers = 3
 max_iterations = 3         # implement<->review retries
 sync_interval = "5m"       # GitHub/Sentry polling interval
 pid_file = "autopr.pid"
+# auto_pr = false          # set true to auto-create PRs after tests pass
 
 [tokens]
 # Prefer env vars: GITLAB_TOKEN, GITHUB_TOKEN, SENTRY_TOKEN
@@ -246,15 +257,24 @@ code blocks (via glamour). Press `tab` to toggle between the input prompt and ou
 
 ## Job States
 
-```
-queued → planning → implementing → reviewing → testing → ready
-                        ↑              │
-                        └──────────────┘  (review requested changes)
-
-ready → approved    (human approves)
-ready → rejected    (human rejects)
-any   → failed      (error)
-failed/rejected → queued  (ap retry)
+```mermaid
+stateDiagram-v2
+    [*] --> queued
+    queued --> planning
+    planning --> implementing
+    implementing --> reviewing
+    reviewing --> implementing : changes requested
+    reviewing --> testing : approved
+    testing --> implementing : tests failed
+    testing --> ready : tests pass
+    ready --> approved : ap approve / auto_pr
+    ready --> rejected : ap reject
+    planning --> failed
+    implementing --> failed
+    reviewing --> failed
+    testing --> failed
+    failed --> queued : ap retry
+    rejected --> queued : ap retry
 ```
 
 ## Custom Prompts

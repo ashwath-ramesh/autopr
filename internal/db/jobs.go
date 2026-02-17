@@ -15,7 +15,7 @@ var ValidTransitions = map[string][]string{
 	"planning":     {"implementing", "failed"},
 	"implementing": {"reviewing", "failed"},
 	"reviewing":    {"implementing", "testing", "failed"},
-	"testing":      {"ready", "failed"},
+	"testing":      {"ready", "implementing", "failed"},
 	"ready":        {"approved", "rejected"},
 	"failed":       {"queued"},
 	"rejected":     {"queued"},
@@ -37,6 +37,45 @@ func StepForState(state string) string {
 	}
 }
 
+// DisplayState returns a display-friendly label for a job state.
+// If prMergedAt is non-empty, the PR has been merged.
+func DisplayState(state string, prMergedAt ...string) string {
+	if len(prMergedAt) > 0 && prMergedAt[0] != "" {
+		return "merged"
+	}
+	switch state {
+	case "ready":
+		return "awaiting approval"
+	case "approved":
+		return "pr created"
+	default:
+		return state
+	}
+}
+
+// DisplayStep returns a display-friendly name for an LLM session step,
+// aligned with the job state names for consistency across the UI.
+func DisplayStep(step string) string {
+	switch step {
+	case "plan":
+		return "planning"
+	case "plan_review":
+		return "reviewing plan"
+	case "implement":
+		return "implementing"
+	case "code_review":
+		return "reviewing"
+	case "tests":
+		return "testing"
+	case "approved":
+		return "approved"
+	case "merged":
+		return "merged"
+	default:
+		return step
+	}
+}
+
 type Job struct {
 	ID              string
 	AutoPRIssueID  string
@@ -49,8 +88,9 @@ type Job struct {
 	CommitSHA       string
 	HumanNotes      string
 	ErrorMessage    string
-	MRURL           string
+	PRURL           string
 	RejectReason    string
+	PRMergedAt      string
 	CreatedAt       string
 	UpdatedAt       string
 	StartedAt       string
@@ -60,6 +100,7 @@ type Job struct {
 	IssueSource   string
 	SourceIssueID string
 	IssueTitle    string
+	IssueURL      string
 }
 
 func (s *Store) CreateJob(ctx context.Context, autoprIssueID, projectName string, maxIterations int) (string, error) {
@@ -126,16 +167,16 @@ func (s *Store) GetJob(ctx context.Context, jobID string) (Job, error) {
 	const q = `
 SELECT id, autopr_issue_id, project_name, state, iteration, max_iterations,
        COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
-       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(mr_url,''),
-       COALESCE(reject_reason,''), created_at, updated_at,
+       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(pr_url,''),
+       COALESCE(reject_reason,''), COALESCE(pr_merged_at,''), created_at, updated_at,
        COALESCE(started_at,''), COALESCE(completed_at,'')
 FROM jobs WHERE id = ?`
 	var j Job
 	err := s.Reader.QueryRowContext(ctx, q, jobID).Scan(
 		&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
 		&j.WorktreePath, &j.BranchName, &j.CommitSHA,
-		&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
-		&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
+		&j.HumanNotes, &j.ErrorMessage, &j.PRURL,
+		&j.RejectReason, &j.PRMergedAt, &j.CreatedAt, &j.UpdatedAt,
 		&j.StartedAt, &j.CompletedAt,
 	)
 	if err != nil {
@@ -151,10 +192,10 @@ func (s *Store) ListJobs(ctx context.Context, project, state string) ([]Job, err
 	q := `
 SELECT j.id, j.autopr_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
        COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
-       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.mr_url,''),
-       COALESCE(j.reject_reason,''), j.created_at, j.updated_at,
+       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.pr_url,''),
+       COALESCE(j.reject_reason,''), COALESCE(j.pr_merged_at,''), j.created_at, j.updated_at,
        COALESCE(j.started_at,''), COALESCE(j.completed_at,''),
-       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,'')
+       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,''), COALESCE(i.url,'')
 FROM jobs j
 LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id
 WHERE 1=1`
@@ -181,10 +222,10 @@ WHERE 1=1`
 		if err := rows.Scan(
 			&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
 			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
-			&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
-			&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
+			&j.HumanNotes, &j.ErrorMessage, &j.PRURL,
+			&j.RejectReason, &j.PRMergedAt, &j.CreatedAt, &j.UpdatedAt,
 			&j.StartedAt, &j.CompletedAt,
-			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle,
+			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle, &j.IssueURL,
 		); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
@@ -197,8 +238,8 @@ WHERE 1=1`
 func (s *Store) UpdateJobField(ctx context.Context, jobID, field, value string) error {
 	allowed := map[string]bool{
 		"worktree_path": true, "branch_name": true, "commit_sha": true,
-		"human_notes": true, "error_message": true, "mr_url": true,
-		"reject_reason": true,
+		"human_notes": true, "error_message": true, "pr_url": true,
+		"reject_reason": true, "pr_merged_at": true,
 	}
 	if !allowed[field] {
 		return fmt.Errorf("cannot update field %q", field)
@@ -235,6 +276,104 @@ WHERE id = ? AND state IN ('failed', 'rejected')`, notes, jobID)
 	n, _ := res.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("job %s cannot be retried from current state", jobID)
+	}
+	return nil
+}
+
+// MarkJobMerged sets pr_merged_at on a job.
+func (s *Store) MarkJobMerged(ctx context.Context, jobID, mergedAt string) error {
+	_, err := s.Writer.ExecContext(ctx,
+		`UPDATE jobs SET pr_merged_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`,
+		mergedAt, jobID)
+	if err != nil {
+		return fmt.Errorf("mark job merged %s: %w", jobID, err)
+	}
+	return nil
+}
+
+// ListApprovedJobsWithPR returns approved jobs that have a PR URL but haven't been marked as merged.
+func (s *Store) ListApprovedJobsWithPR(ctx context.Context) ([]Job, error) {
+	const q = `
+SELECT j.id, j.autopr_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
+       COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
+       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.pr_url,''),
+       COALESCE(j.reject_reason,''), COALESCE(j.pr_merged_at,''), j.created_at, j.updated_at,
+       COALESCE(j.started_at,''), COALESCE(j.completed_at,''),
+       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,''), COALESCE(i.url,'')
+FROM jobs j
+LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id
+WHERE j.state = 'approved' AND j.pr_url != '' AND (j.pr_merged_at IS NULL OR j.pr_merged_at = '')
+ORDER BY j.updated_at DESC`
+	rows, err := s.Reader.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list approved jobs with PR: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(
+			&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
+			&j.HumanNotes, &j.ErrorMessage, &j.PRURL,
+			&j.RejectReason, &j.PRMergedAt, &j.CreatedAt, &j.UpdatedAt,
+			&j.StartedAt, &j.CompletedAt,
+			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle, &j.IssueURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan approved job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// ListCleanableJobs returns jobs whose worktrees can be safely removed:
+// rejected/failed jobs, and approved jobs where the PR has been merged.
+func (s *Store) ListCleanableJobs(ctx context.Context) ([]Job, error) {
+	const q = `
+SELECT id, autopr_issue_id, project_name, state, iteration, max_iterations,
+       COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
+       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(pr_url,''),
+       COALESCE(reject_reason,''), COALESCE(pr_merged_at,''), created_at, updated_at,
+       COALESCE(started_at,''), COALESCE(completed_at,'')
+FROM jobs
+WHERE worktree_path IS NOT NULL AND worktree_path != ''
+  AND (
+    state IN ('rejected', 'failed')
+    OR (state = 'approved' AND pr_merged_at IS NOT NULL AND pr_merged_at != '')
+  )
+ORDER BY updated_at DESC`
+	rows, err := s.Reader.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list cleanable jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(
+			&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
+			&j.HumanNotes, &j.ErrorMessage, &j.PRURL,
+			&j.RejectReason, &j.PRMergedAt, &j.CreatedAt, &j.UpdatedAt,
+			&j.StartedAt, &j.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan cleanable job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// ClearWorktreePath sets worktree_path to NULL for a job after cleanup.
+func (s *Store) ClearWorktreePath(ctx context.Context, jobID string) error {
+	_, err := s.Writer.ExecContext(ctx,
+		`UPDATE jobs SET worktree_path = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`,
+		jobID)
+	if err != nil {
+		return fmt.Errorf("clear worktree path %s: %w", jobID, err)
 	}
 	return nil
 }

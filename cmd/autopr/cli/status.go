@@ -82,8 +82,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Println("Daemon: stopped")
 	}
-	fmt.Printf("Jobs: queued=%d planning=%d implementing=%d reviewing=%d testing=%d ready=%d failed=%d approved=%d rejected=%d\n",
+	// Count merged separately (approved jobs with pr_merged_at set).
+	var merged int
+	_ = store.Reader.QueryRowContext(cmd.Context(),
+		`SELECT COUNT(*) FROM jobs WHERE state = 'approved' AND pr_merged_at IS NOT NULL AND pr_merged_at != ''`).Scan(&merged)
+	prCreated := counts["approved"] - merged
+
+	fmt.Printf("Jobs: queued=%d planning=%d implementing=%d reviewing=%d testing=%d awaiting_approval=%d failed=%d pr_created=%d merged=%d rejected=%d\n",
 		counts["queued"], counts["planning"], counts["implementing"], counts["reviewing"],
-		counts["testing"], counts["ready"], counts["failed"], counts["approved"], counts["rejected"])
+		counts["testing"], counts["ready"], counts["failed"], prCreated, merged, counts["rejected"])
 	return nil
 }

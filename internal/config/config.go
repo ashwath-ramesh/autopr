@@ -35,6 +35,7 @@ type DaemonConfig struct {
 	MaxIterations int    `toml:"max_iterations"`
 	SyncInterval  string `toml:"sync_interval"`
 	PIDFile       string `toml:"pid_file"`
+	AutoPR        bool   `toml:"auto_pr"`
 }
 
 type TokensConfig struct {

@@ -52,8 +52,8 @@ func runList(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%-10s %-14s %-13s %-13s %-5s %-40s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "ITER", "ISSUE", "UPDATED")
-	fmt.Println(strings.Repeat("-", 115))
+	fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-40s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "RETRY", "ISSUE", "UPDATED")
+	fmt.Println(strings.Repeat("-", 121))
 	for _, j := range jobs {
 		source := ""
 		if j.IssueSource != "" && j.SourceIssueID != "" {
@@ -61,8 +61,8 @@ func runList(cmd *cobra.Command, args []string) error {
 		}
 		title := truncate(j.IssueTitle, 40)
 
-		fmt.Printf("%-10s %-14s %-13s %-13s %-5s %-40s %s\n",
-			db.ShortID(j.ID), j.State, truncate(j.ProjectName, 12), source,
+		fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-40s %s\n",
+			db.ShortID(j.ID), db.DisplayState(j.State, j.PRMergedAt), truncate(j.ProjectName, 12), source,
 			fmt.Sprintf("%d/%d", j.Iteration, j.MaxIterations),
 			title, j.UpdatedAt)
 	}

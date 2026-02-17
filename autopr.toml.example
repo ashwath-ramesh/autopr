@@ -13,6 +13,7 @@ max_workers = 3
 max_iterations = 3
 sync_interval = "5m"
 pid_file = "autopr.pid"
+# auto_pr = false               # Set true to auto-create PRs after tests pass
 
 [tokens]
 # Prefer environment variables: GITLAB_TOKEN, GITHUB_TOKEN, SENTRY_TOKEN

@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"autopr/internal/config"
 	"autopr/internal/db"
+	"autopr/internal/git"
 )
 
 // Syncer periodically pulls issues from configured sources.
@@ -49,6 +51,9 @@ func (s *Syncer) syncAll(ctx context.Context) {
 			slog.Error("sync project failed", "project", p.Name, "err", err)
 		}
 	}
+
+	// Check if any approved PRs have been merged.
+	s.checkMergedPRs(ctx)
 }
 
 func (s *Syncer) syncProject(ctx context.Context, p *config.ProjectConfig) error {
@@ -94,4 +99,66 @@ func (s *Syncer) createJobIfNeeded(ctx context.Context, ffid, projectName string
 	}
 
 	slog.Info("sync: created job", "job_id", jobID, "ffid", ffid)
+}
+
+// checkMergedPRs polls GitHub/GitLab for approved jobs whose PR may have been merged.
+func (s *Syncer) checkMergedPRs(ctx context.Context) {
+	jobs, err := s.store.ListApprovedJobsWithPR(ctx)
+	if err != nil {
+		slog.Error("check merged PRs: list jobs", "err", err)
+		return
+	}
+	if len(jobs) == 0 {
+		return
+	}
+
+	slog.Debug("checking PR merge status", "count", len(jobs))
+
+	for _, job := range jobs {
+		proj, ok := s.cfg.ProjectByName(job.ProjectName)
+		if !ok {
+			continue
+		}
+
+		var status git.PRMergeStatus
+		var checkErr error
+
+		switch {
+		case proj.GitHub != nil && strings.Contains(job.PRURL, "github.com"):
+			if s.cfg.Tokens.GitHub == "" {
+				continue
+			}
+			status, checkErr = git.CheckGitHubPRMerged(ctx, s.cfg.Tokens.GitHub, job.PRURL)
+
+		case proj.GitLab != nil && strings.Contains(job.PRURL, "gitlab"):
+			if s.cfg.Tokens.GitLab == "" {
+				continue
+			}
+			baseURL := ""
+			if proj.GitLab != nil {
+				baseURL = proj.GitLab.BaseURL
+			}
+			status, checkErr = git.CheckGitLabMRMerged(ctx, s.cfg.Tokens.GitLab, baseURL, job.PRURL)
+
+		default:
+			continue
+		}
+
+		if checkErr != nil {
+			slog.Warn("check PR merge status failed", "job", job.ID, "err", checkErr)
+			continue
+		}
+
+		if status.Merged {
+			mergedAt := status.MergedAt
+			if mergedAt == "" {
+				mergedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+			}
+			if err := s.store.MarkJobMerged(ctx, job.ID, mergedAt); err != nil {
+				slog.Error("mark job merged", "job", job.ID, "err", err)
+				continue
+			}
+			slog.Info("PR merged", "job", db.ShortID(job.ID), "pr_url", job.PRURL)
+		}
+	}
 }

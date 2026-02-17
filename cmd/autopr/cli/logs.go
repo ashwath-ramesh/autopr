@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"autopr/internal/db"
+
 	"github.com/spf13/cobra"
 )
 
@@ -61,7 +63,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	// Fetch linked issue for source info.
 	issue, issueErr := store.GetIssueByAPID(cmd.Context(), job.AutoPRIssueID)
 
-	fmt.Printf("Job: %s  State: %s  Iteration: %d/%d\n", job.ID, job.State, job.Iteration, job.MaxIterations)
+	fmt.Printf("Job: %s  State: %s  Retry: %d/%d\n", job.ID, db.DisplayState(job.State, job.PRMergedAt), job.Iteration, job.MaxIterations)
 	if issueErr == nil && issue.Source != "" && issue.SourceIssueID != "" {
 		fmt.Printf("Issue: %s #%s  Project: %s\n",
 			strings.ToUpper(issue.Source[:1])+issue.Source[1:], issue.SourceIssueID, job.ProjectName)
@@ -77,8 +79,11 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	if job.ErrorMessage != "" {
 		fmt.Printf("Error: %s\n", job.ErrorMessage)
 	}
-	if job.MRURL != "" {
-		fmt.Printf("MR: %s\n", job.MRURL)
+	if job.PRURL != "" {
+		fmt.Printf("PR: %s\n", job.PRURL)
+	}
+	if job.PRMergedAt != "" {
+		fmt.Printf("Merged: %s\n", job.PRMergedAt)
 	}
 	fmt.Println()
 
