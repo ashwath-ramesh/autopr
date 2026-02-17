@@ -315,6 +315,74 @@ FROM llm_sessions WHERE job_id = ? ORDER BY id ASC`
 	return out, rows.Err()
 }
 
+// LLMSessionSummary contains only metadata columns (no response_text) for list displays.
+type LLMSessionSummary struct {
+	ID           int
+	JobID        string
+	Step         string
+	Iteration    int
+	LLMProvider  string
+	InputTokens  int
+	OutputTokens int
+	DurationMS   int
+	Status       string
+	ErrorMessage string
+	CreatedAt    string
+	CompletedAt  string
+}
+
+func (s *Store) ListSessionSummariesByJob(ctx context.Context, jobID string) ([]LLMSessionSummary, error) {
+	const q = `
+SELECT id, job_id, step, iteration, llm_provider,
+       COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(duration_ms,0),
+       status, COALESCE(error_message,''), created_at, COALESCE(completed_at,'')
+FROM llm_sessions WHERE job_id = ? ORDER BY id ASC`
+	rows, err := s.Reader.QueryContext(ctx, q, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("list session summaries: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LLMSessionSummary
+	for rows.Next() {
+		var sess LLMSessionSummary
+		if err := rows.Scan(
+			&sess.ID, &sess.JobID, &sess.Step, &sess.Iteration, &sess.LLMProvider,
+			&sess.InputTokens, &sess.OutputTokens, &sess.DurationMS,
+			&sess.Status, &sess.ErrorMessage, &sess.CreatedAt, &sess.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan session summary: %w", err)
+		}
+		out = append(out, sess)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetFullSession(ctx context.Context, sessionID int) (LLMSession, error) {
+	const q = `
+SELECT id, job_id, step, iteration, llm_provider,
+       COALESCE(prompt_hash,''), COALESCE(response_text,''),
+       COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(duration_ms,0),
+       COALESCE(jsonl_path,''), COALESCE(commit_sha,''), status,
+       COALESCE(error_message,''), created_at, COALESCE(completed_at,'')
+FROM llm_sessions WHERE id = ?`
+	var sess LLMSession
+	err := s.Reader.QueryRowContext(ctx, q, sessionID).Scan(
+		&sess.ID, &sess.JobID, &sess.Step, &sess.Iteration, &sess.LLMProvider,
+		&sess.PromptHash, &sess.ResponseText,
+		&sess.InputTokens, &sess.OutputTokens, &sess.DurationMS,
+		&sess.JSONLPath, &sess.CommitSHA, &sess.Status,
+		&sess.ErrorMessage, &sess.CreatedAt, &sess.CompletedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return LLMSession{}, fmt.Errorf("session %d not found", sessionID)
+		}
+		return LLMSession{}, fmt.Errorf("get session %d: %w", sessionID, err)
+	}
+	return sess, nil
+}
+
 // Artifact operations.
 
 type Artifact struct {
