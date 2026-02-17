@@ -18,12 +18,15 @@ var (
 	cfgPath string
 	verbose bool
 	jsonOut bool
+	version = "dev"
+	commit  = "unknown"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "ap",
-	Short: "AutoPR — autonomous issue-to-PR daemon",
-	Long:  "AutoPR watches your GitLab/GitHub/Sentry issues, then uses an LLM to plan, implement, test, and push fixes — ready for human approval.",
+	Use:     "ap",
+	Short:   "AutoPR — autonomous issue-to-PR daemon",
+	Long:    "AutoPR watches your GitLab/GitHub/Sentry issues, then uses an LLM to plan, implement, test, and push fixes — ready for human approval.",
+	Version: fmt.Sprintf("%s (%s)", version, commit),
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		level := slog.LevelInfo
 		if verbose {
