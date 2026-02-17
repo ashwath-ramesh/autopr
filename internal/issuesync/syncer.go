@@ -52,8 +52,8 @@ func (s *Syncer) syncAll(ctx context.Context) {
 		}
 	}
 
-	// Check if any approved PRs have been merged.
-	s.checkMergedPRs(ctx)
+	// Check if any approved PRs have been merged or closed.
+	s.checkPRStatus(ctx)
 }
 
 func (s *Syncer) syncProject(ctx context.Context, p *config.ProjectConfig) error {
@@ -101,18 +101,18 @@ func (s *Syncer) createJobIfNeeded(ctx context.Context, ffid, projectName string
 	slog.Info("sync: created job", "job_id", jobID, "ffid", ffid)
 }
 
-// checkMergedPRs polls GitHub/GitLab for approved jobs whose PR may have been merged.
-func (s *Syncer) checkMergedPRs(ctx context.Context) {
+// checkPRStatus polls GitHub/GitLab for approved jobs whose PR may have been merged or closed.
+func (s *Syncer) checkPRStatus(ctx context.Context) {
 	jobs, err := s.store.ListApprovedJobsWithPR(ctx)
 	if err != nil {
-		slog.Error("check merged PRs: list jobs", "err", err)
+		slog.Error("check PR status: list jobs", "err", err)
 		return
 	}
 	if len(jobs) == 0 {
 		return
 	}
 
-	slog.Debug("checking PR merge status", "count", len(jobs))
+	slog.Debug("checking PR status", "count", len(jobs))
 
 	for _, job := range jobs {
 		proj, ok := s.cfg.ProjectByName(job.ProjectName)
@@ -124,13 +124,13 @@ func (s *Syncer) checkMergedPRs(ctx context.Context) {
 		var checkErr error
 
 		switch {
-		case proj.GitHub != nil && strings.Contains(job.PRURL, "github.com"):
+		case proj.GitHub != nil && strings.Contains(job.PRURL, "/pull/"):
 			if s.cfg.Tokens.GitHub == "" {
 				continue
 			}
-			status, checkErr = git.CheckGitHubPRMerged(ctx, s.cfg.Tokens.GitHub, job.PRURL)
+			status, checkErr = git.CheckGitHubPRStatus(ctx, s.cfg.Tokens.GitHub, job.PRURL)
 
-		case proj.GitLab != nil && strings.Contains(job.PRURL, "gitlab"):
+		case proj.GitLab != nil && strings.Contains(job.PRURL, "/merge_requests/"):
 			if s.cfg.Tokens.GitLab == "" {
 				continue
 			}
@@ -138,14 +138,14 @@ func (s *Syncer) checkMergedPRs(ctx context.Context) {
 			if proj.GitLab != nil {
 				baseURL = proj.GitLab.BaseURL
 			}
-			status, checkErr = git.CheckGitLabMRMerged(ctx, s.cfg.Tokens.GitLab, baseURL, job.PRURL)
+			status, checkErr = git.CheckGitLabMRStatus(ctx, s.cfg.Tokens.GitLab, baseURL, job.PRURL)
 
 		default:
 			continue
 		}
 
 		if checkErr != nil {
-			slog.Warn("check PR merge status failed", "job", job.ID, "err", checkErr)
+			slog.Warn("check PR status failed", "job", job.ID, "err", checkErr)
 			continue
 		}
 
@@ -159,6 +159,16 @@ func (s *Syncer) checkMergedPRs(ctx context.Context) {
 				continue
 			}
 			slog.Info("PR merged", "job", db.ShortID(job.ID), "pr_url", job.PRURL)
+		} else if status.Closed {
+			closedAt := status.ClosedAt
+			if closedAt == "" {
+				closedAt = time.Now().UTC().Format("2006-01-02T15:04:05Z")
+			}
+			if err := s.store.MarkJobPRClosed(ctx, job.ID, closedAt); err != nil {
+				slog.Error("mark job PR closed", "job", job.ID, "err", err)
+				continue
+			}
+			slog.Info("PR closed", "job", db.ShortID(job.ID), "pr_url", job.PRURL)
 		}
 	}
 }

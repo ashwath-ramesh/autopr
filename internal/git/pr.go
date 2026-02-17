@@ -154,17 +154,19 @@ func CreateGitLabMR(ctx context.Context, token, baseURL, projectID, sourceBranch
 	return result.WebURL, nil
 }
 
-// PRMergeStatus holds the result of a merge check.
+// PRMergeStatus holds the result of a PR/MR status check.
 type PRMergeStatus struct {
 	Merged   bool
 	MergedAt string // ISO 8601 timestamp, empty if not merged
+	Closed   bool
+	ClosedAt string // ISO 8601 timestamp, empty if not closed
 }
 
 var githubPRNumberRe = regexp.MustCompile(`/pull/(\d+)`)
 
-// CheckGitHubPRMerged checks whether a GitHub PR has been merged.
+// CheckGitHubPRStatus checks whether a GitHub PR has been merged or closed.
 // prURL should be like "https://github.com/owner/repo/pull/123".
-func CheckGitHubPRMerged(ctx context.Context, token, prURL string) (PRMergeStatus, error) {
+func CheckGitHubPRStatus(ctx context.Context, token, prURL string) (PRMergeStatus, error) {
 	matches := githubPRNumberRe.FindStringSubmatch(prURL)
 	if len(matches) < 2 {
 		return PRMergeStatus{}, fmt.Errorf("cannot parse PR number from URL: %s", prURL)
@@ -189,30 +191,38 @@ func CheckGitHubPRMerged(ctx context.Context, token, prURL string) (PRMergeStatu
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return PRMergeStatus{}, fmt.Errorf("check PR merged: %w", err)
+		return PRMergeStatus{}, fmt.Errorf("check PR status: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return PRMergeStatus{}, fmt.Errorf("check PR merged: HTTP %d", resp.StatusCode)
+		return PRMergeStatus{}, fmt.Errorf("check PR status: HTTP %d", resp.StatusCode)
 	}
 
 	var pr struct {
+		State    string `json:"state"`
 		Merged   bool   `json:"merged"`
 		MergedAt string `json:"merged_at"`
+		ClosedAt string `json:"closed_at"`
 	}
 	if err := json.Unmarshal(body, &pr); err != nil {
 		return PRMergeStatus{}, fmt.Errorf("decode PR status: %w", err)
 	}
-	return PRMergeStatus{Merged: pr.Merged, MergedAt: pr.MergedAt}, nil
+	status := PRMergeStatus{Merged: pr.Merged, MergedAt: pr.MergedAt}
+	// GitHub: state "closed" + merged false = closed without merge.
+	if pr.State == "closed" && !pr.Merged {
+		status.Closed = true
+		status.ClosedAt = pr.ClosedAt
+	}
+	return status, nil
 }
 
 var gitlabMRNumberRe = regexp.MustCompile(`/merge_requests/(\d+)`)
 
-// CheckGitLabMRMerged checks whether a GitLab MR has been merged.
+// CheckGitLabMRStatus checks whether a GitLab MR has been merged or closed.
 // mrURL should be like "https://gitlab.com/org/repo/-/merge_requests/123".
-func CheckGitLabMRMerged(ctx context.Context, token, baseURL, mrURL string) (PRMergeStatus, error) {
+func CheckGitLabMRStatus(ctx context.Context, token, baseURL, mrURL string) (PRMergeStatus, error) {
 	if baseURL == "" {
 		baseURL = "https://gitlab.com"
 	}
@@ -241,21 +251,28 @@ func CheckGitLabMRMerged(ctx context.Context, token, baseURL, mrURL string) (PRM
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return PRMergeStatus{}, fmt.Errorf("check MR merged: %w", err)
+		return PRMergeStatus{}, fmt.Errorf("check MR status: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return PRMergeStatus{}, fmt.Errorf("check MR merged: HTTP %d", resp.StatusCode)
+		return PRMergeStatus{}, fmt.Errorf("check MR status: HTTP %d", resp.StatusCode)
 	}
 
 	var mr struct {
 		State    string `json:"state"`
 		MergedAt string `json:"merged_at"`
+		ClosedAt string `json:"closed_at"`
 	}
 	if err := json.Unmarshal(body, &mr); err != nil {
 		return PRMergeStatus{}, fmt.Errorf("decode MR status: %w", err)
 	}
-	return PRMergeStatus{Merged: mr.State == "merged", MergedAt: mr.MergedAt}, nil
+	status := PRMergeStatus{Merged: mr.State == "merged", MergedAt: mr.MergedAt}
+	// GitLab: "closed" is distinct from "merged".
+	if mr.State == "closed" {
+		status.Closed = true
+		status.ClosedAt = mr.ClosedAt
+	}
+	return status, nil
 }

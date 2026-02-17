@@ -63,7 +63,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	// Fetch linked issue for source info.
 	issue, issueErr := store.GetIssueByAPID(cmd.Context(), job.AutoPRIssueID)
 
-	fmt.Printf("Job: %s  State: %s  Retry: %d/%d\n", job.ID, db.DisplayState(job.State, job.PRMergedAt), job.Iteration, job.MaxIterations)
+	fmt.Printf("Job: %s  State: %s  Retry: %d/%d\n", job.ID, db.DisplayState(job.State, job.PRMergedAt, job.PRClosedAt), job.Iteration, job.MaxIterations)
 	if issueErr == nil && issue.Source != "" && issue.SourceIssueID != "" {
 		fmt.Printf("Issue: %s #%s  Project: %s\n",
 			strings.ToUpper(issue.Source[:1])+issue.Source[1:], issue.SourceIssueID, job.ProjectName)
@@ -84,6 +84,9 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 	if job.PRMergedAt != "" {
 		fmt.Printf("Merged: %s\n", job.PRMergedAt)
+	}
+	if job.PRClosedAt != "" {
+		fmt.Printf("PR Closed: %s\n", job.PRClosedAt)
 	}
 	fmt.Println()
 

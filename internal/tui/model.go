@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -40,6 +41,7 @@ var (
 		"ready":        lipgloss.NewStyle().Foreground(lipgloss.Color("46")),
 		"approved":     lipgloss.NewStyle().Foreground(lipgloss.Color("40")),
 		"merged":       lipgloss.NewStyle().Foreground(lipgloss.Color("141")),
+		"pr closed":   lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
 		"rejected":     lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
 		"failed":       lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
 	}
@@ -215,14 +217,28 @@ func (m Model) openInEditor() tea.Msg {
 
 // openInBrowser opens the PR URL in the default browser.
 func (m Model) openInBrowser() tea.Msg {
-	_ = exec.Command("open", m.selected.PRURL).Start()
+	openURL(m.selected.PRURL)
 	return nil
 }
 
 // openIssue opens the original issue URL in the default browser.
 func (m Model) openIssue() tea.Msg {
-	_ = exec.Command("open", m.selected.IssueURL).Start()
+	openURL(m.selected.IssueURL)
 	return nil
+}
+
+// openURL opens a URL in the default browser across platforms.
+func openURL(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
+	default: // linux, freebsd, etc.
+		cmd = exec.Command("xdg-open", url)
+	}
+	_ = cmd.Start()
 }
 
 // ── Job Actions ─────────────────────────────────────────────────────────────
@@ -469,6 +485,9 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 	if m.selected != nil && m.selected.PRMergedAt != "" {
 		maxCursor++
 	}
+	if m.selected != nil && m.selected.PRClosedAt != "" {
+		maxCursor++
+	}
 	switch key {
 	case "up", "k":
 		if m.sessCursor > 0 {
@@ -491,6 +510,10 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 		if m.selected != nil && m.selected.PRURL != "" {
 			mergedRowIdx++
 		}
+		closedRowIdx := mergedRowIdx
+		if m.selected != nil && m.selected.PRMergedAt != "" {
+			closedRowIdx++
+		}
 		if m.testArtifact != nil && m.sessCursor == testRowIdx {
 			m = m.enterTestView()
 			return m, nil
@@ -501,6 +524,10 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 		}
 		if m.selected != nil && m.selected.PRMergedAt != "" && m.sessCursor == mergedRowIdx {
 			m = m.enterMergedView()
+			return m, nil
+		}
+		if m.selected != nil && m.selected.PRClosedAt != "" && m.sessCursor == closedRowIdx {
+			m = m.enterPRClosedView()
 			return m, nil
 		}
 	case "d":
@@ -686,6 +713,22 @@ func (m Model) enterPRView() Model {
 	return m
 }
 
+// enterPRClosedView enters Level 3 to display the PR closed details.
+func (m Model) enterPRClosedView() Model {
+	content := fmt.Sprintf("Pull request was closed without merging.\n\n**Closed at:** %s\n\n**PR:** %s", m.selected.PRClosedAt, m.selected.PRURL)
+	m.selectedSession = &db.LLMSession{
+		Step:         "pr closed",
+		LLMProvider:  "-",
+		Status:       "completed",
+		ResponseText: content,
+		PromptText:   "(detected by sync loop)",
+	}
+	m.showInput = false
+	m.scrollOffset = 0
+	m.lines = renderMarkdown(content, m.cw())
+	return m
+}
+
 func maxOffset(lines []string, avail int) int {
 	n := len(lines) - avail
 	if n < 0 {
@@ -785,7 +828,7 @@ func (m Model) listView() string {
 				cursor = "> "
 			}
 
-			displayState := db.DisplayState(job.State, job.PRMergedAt)
+			displayState := db.DisplayState(job.State, job.PRMergedAt, job.PRClosedAt)
 			st, ok := stateStyle[displayState]
 			if !ok {
 				st, ok = stateStyle[job.State]
@@ -836,7 +879,7 @@ func (m Model) detailView() string {
 	w := m.cw()
 	job := m.selected
 
-	displayState := db.DisplayState(job.State, job.PRMergedAt)
+	displayState := db.DisplayState(job.State, job.PRMergedAt, job.PRClosedAt)
 	st, ok := stateStyle[displayState]
 	if !ok {
 		st, ok = stateStyle[job.State]
@@ -874,6 +917,9 @@ func (m Model) detailView() string {
 	if job.PRMergedAt != "" {
 		kv("Merged", stateStyle["merged"].Render(job.PRMergedAt))
 	}
+	if job.PRClosedAt != "" {
+		kv("PR Closed", stateStyle["pr closed"].Render(job.PRClosedAt))
+	}
 	if job.ErrorMessage != "" {
 		kv("Error", lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(job.ErrorMessage))
 	}
@@ -896,6 +942,9 @@ func (m Model) detailView() string {
 		stepCount++
 	}
 	if job.PRMergedAt != "" {
+		stepCount++
+	}
+	if job.PRClosedAt != "" {
 		stepCount++
 	}
 	b.WriteString(dimStyle.Render(fmt.Sprintf("  %d steps", stepCount)))
@@ -1039,6 +1088,38 @@ func (m Model) detailView() string {
 			b.WriteString(line)
 			b.WriteString("\n")
 		}
+
+		// PR closed row (shows when the PR was closed without merging).
+		if job.PRClosedAt != "" {
+			closedIdx := len(m.sessions)
+			if m.testArtifact != nil {
+				closedIdx++
+			}
+			if job.PRURL != "" {
+				closedIdx++
+			}
+			if job.PRMergedAt != "" {
+				closedIdx++
+			}
+			cursor := "  "
+			if closedIdx == m.sessCursor {
+				cursor = "> "
+			}
+
+			line := cursor +
+				padRight(fmt.Sprintf("%d", closedIdx+1), sColNum) +
+				padRight("pr closed", sColStep) +
+				stateStyle["pr closed"].Render(padRight("closed", sColStatus)) +
+				padRight("-", sColProvider) +
+				padRight("-", sColTokens) +
+				dimStyle.Render("-")
+
+			if closedIdx == m.sessCursor {
+				line = selectedStyle.Render(line)
+			}
+			b.WriteString(line)
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString(dimStyle.Render(strings.Repeat("─", w)))
@@ -1110,6 +1191,18 @@ func (m Model) sessionView() string {
 			sessNum++
 		}
 		if m.selected != nil && m.selected.PRURL != "" {
+			sessNum++
+		}
+	}
+	if sessNum == 0 && sess.Step == "pr closed" {
+		sessNum = len(m.sessions) + 1
+		if m.testArtifact != nil {
+			sessNum++
+		}
+		if m.selected != nil && m.selected.PRURL != "" {
+			sessNum++
+		}
+		if m.selected != nil && m.selected.PRMergedAt != "" {
 			sessNum++
 		}
 	}

@@ -62,7 +62,7 @@ func runList(cmd *cobra.Command, args []string) error {
 		title := truncate(j.IssueTitle, 40)
 
 		fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-40s %s\n",
-			db.ShortID(j.ID), db.DisplayState(j.State, j.PRMergedAt), truncate(j.ProjectName, 12), source,
+			db.ShortID(j.ID), db.DisplayState(j.State, j.PRMergedAt, j.PRClosedAt), truncate(j.ProjectName, 12), source,
 			fmt.Sprintf("%d/%d", j.Iteration, j.MaxIterations),
 			title, j.UpdatedAt)
 	}

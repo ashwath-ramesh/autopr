@@ -258,8 +258,11 @@ func BuildPRContent(ctx context.Context, store *db.Store, job db.Job, issue db.I
 }
 
 // buildBranchName creates a descriptive branch name from the issue.
-// Example: autopr/github-42-fix-login-timeout
+// Includes a job-unique suffix to avoid collisions when repeated jobs target the same issue.
+// Example: autopr/github-42-fix-login-timeout-8aeda806
 func buildBranchName(issue db.Issue, jobID string) string {
+	suffix := db.ShortID(jobID)
+
 	// Start with source and issue number if available.
 	prefix := "autopr/"
 	if issue.Source != "" && issue.SourceIssueID != "" {
@@ -269,18 +272,17 @@ func buildBranchName(issue db.Issue, jobID string) string {
 	// Slugify the issue title.
 	slug := slugify(issue.Title)
 	if slug == "" {
-		// Fallback to short job ID if title is empty.
-		return "autopr/" + db.ShortID(jobID)
+		return "autopr/" + suffix
 	}
 
-	// Keep branch name reasonable length.
+	// Keep branch name reasonable length (reserve room for -suffix).
 	name := prefix + slug
-	if len(name) > 60 {
-		name = name[:60]
-		// Don't end on a hyphen.
+	maxLen := 60 - len(suffix) - 1 // -1 for the hyphen
+	if len(name) > maxLen {
+		name = name[:maxLen]
 		name = strings.TrimRight(name, "-")
 	}
-	return name
+	return name + "-" + suffix
 }
 
 // slugify converts a string to a git-branch-safe slug.
