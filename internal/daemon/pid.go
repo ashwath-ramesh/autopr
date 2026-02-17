@@ -53,7 +53,7 @@ func IsRunning(path string) bool {
 	if err != nil {
 		return false
 	}
-	return processAlive(pid)
+	return ProcessAlive(pid)
 }
 
 // RemovePID removes the PID file.
@@ -61,7 +61,8 @@ func RemovePID(path string) {
 	_ = os.Remove(path)
 }
 
-func processAlive(pid int) bool {
+// ProcessAlive checks whether the given PID is still running.
+func ProcessAlive(pid int) bool {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		return false
@@ -75,7 +76,7 @@ func cleanStalePID(path string) bool {
 		_ = os.Remove(path)
 		return true
 	}
-	if !processAlive(pid) {
+	if !ProcessAlive(pid) {
 		_ = os.Remove(path)
 		return true
 	}
