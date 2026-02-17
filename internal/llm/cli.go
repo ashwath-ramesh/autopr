@@ -136,8 +136,9 @@ func (p *CLIProvider) buildArgs(prompt, jsonlFile string) []string {
 		}
 	case "codex":
 		return []string{
+			"exec",
 			"--full-auto",
-			"--quiet",
+			"--json",
 			prompt,
 		}
 	default:
