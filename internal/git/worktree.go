@@ -2,46 +2,36 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"sync"
+	"path/filepath"
 )
 
-// repoMutexes provides per-repo locking for worktree operations.
-var (
-	repoMu      sync.Mutex
-	repoMutexes = map[string]*sync.Mutex{}
-)
-
-func lockRepo(repoPath string) *sync.Mutex {
-	repoMu.Lock()
-	defer repoMu.Unlock()
-	mu, ok := repoMutexes[repoPath]
-	if !ok {
-		mu = &sync.Mutex{}
-		repoMutexes[repoPath] = mu
-	}
-	return mu
-}
-
-// CreateWorktree adds a new git worktree for the given branch.
-func CreateWorktree(ctx context.Context, repoPath, worktreePath, branchName string) error {
-	mu := lockRepo(repoPath)
-	mu.Lock()
-	defer mu.Unlock()
-	return runGit(ctx, repoPath, "worktree", "add", worktreePath, branchName)
-}
-
-// RemoveWorktree removes a git worktree.
-func RemoveWorktree(ctx context.Context, repoPath, worktreePath string) error {
-	mu := lockRepo(repoPath)
-	mu.Lock()
-	defer mu.Unlock()
-	// Remove the directory first if git worktree remove fails.
-	err := runGit(ctx, repoPath, "worktree", "remove", "--force", worktreePath)
+// CloneForJob creates a regular (non-bare) clone from the local bare repo
+// and checks out a new branch from the base branch. This is used instead of
+// git worktrees because LLM tools (e.g. codex) may run `git init` in the
+// working directory, which destroys worktree .git link files but is a no-op
+// on a regular .git directory.
+func CloneForJob(ctx context.Context, bareRepoPath, destPath, branchName, baseBranch string) error {
+	absRepo, err := filepath.Abs(bareRepoPath)
 	if err != nil {
-		// Fallback: remove dir and prune.
-		_ = os.RemoveAll(worktreePath)
-		_ = runGit(ctx, repoPath, "worktree", "prune")
+		return fmt.Errorf("abs repo path: %w", err)
 	}
+
+	// Clone from the local bare repo (uses hard links, very fast).
+	if err := runGit(ctx, "", "clone", absRepo, destPath); err != nil {
+		return fmt.Errorf("clone for job: %w", err)
+	}
+
+	// Create and checkout the job branch from the base branch.
+	if err := runGit(ctx, destPath, "checkout", "-b", branchName, "origin/"+baseBranch); err != nil {
+		return fmt.Errorf("create job branch: %w", err)
+	}
+
 	return nil
+}
+
+// RemoveJobDir removes a job's cloned working directory.
+func RemoveJobDir(worktreePath string) {
+	_ = os.RemoveAll(worktreePath)
 }

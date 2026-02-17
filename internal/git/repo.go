@@ -34,11 +34,6 @@ func Fetch(ctx context.Context, localPath string) error {
 	return runGit(ctx, localPath, "fetch", "--all", "--prune")
 }
 
-// CreateBranch creates a new branch from baseBranch in the bare repo.
-func CreateBranch(ctx context.Context, repoPath, branchName, baseBranch string) error {
-	return runGit(ctx, repoPath, "branch", branchName, "origin/"+baseBranch)
-}
-
 // LatestCommit returns the HEAD commit SHA in the given directory.
 func LatestCommit(ctx context.Context, dir string) (string, error) {
 	out, err := runGitOutput(ctx, dir, "rev-parse", "HEAD")
