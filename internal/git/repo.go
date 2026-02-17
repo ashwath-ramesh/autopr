@@ -63,6 +63,8 @@ func CommitAll(ctx context.Context, dir, message string) (string, error) {
 }
 
 // PushBranch pushes a branch to origin.
+// NOTE: This requires Contents: Read and write on the GitHub fine-grained PAT.
+// With read-only access, this call will fail with a permission error.
 func PushBranch(ctx context.Context, dir, branchName string) error {
 	return runGit(ctx, dir, "push", "origin", branchName)
 }

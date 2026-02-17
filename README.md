@@ -114,6 +114,10 @@ base_branch = "main"
 | `SENTRY_TOKEN` | `[tokens] sentry` |
 | `FIXFLOW_WEBHOOK_SECRET` | `[daemon] webhook_secret` |
 
+> **Note:** `GITHUB_TOKEN` requires a fine-grained PAT with `Contents: Read and write` + `Issues: Read-only`
+> scoped to the target repo. With read-only contents access, the daemon will work end-to-end but
+> branch push will fail — you'll need to push branches manually after approving jobs.
+
 ## Setting Up a Project
 
 ### GitLab (webhook-driven)
