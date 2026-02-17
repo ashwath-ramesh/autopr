@@ -55,6 +55,11 @@ type Job struct {
 	UpdatedAt       string
 	StartedAt       string
 	CompletedAt     string
+
+	// Joined from issues table (populated by ListJobs).
+	IssueSource   string
+	SourceIssueID string
+	IssueTitle    string
 }
 
 func (s *Store) CreateJob(ctx context.Context, fixflowIssueID, projectName string, maxIterations int) (string, error) {
@@ -144,22 +149,25 @@ FROM jobs WHERE id = ?`
 
 func (s *Store) ListJobs(ctx context.Context, project, state string) ([]Job, error) {
 	q := `
-SELECT id, fixflow_issue_id, project_name, state, iteration, max_iterations,
-       COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
-       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(mr_url,''),
-       COALESCE(reject_reason,''), created_at, updated_at,
-       COALESCE(started_at,''), COALESCE(completed_at,'')
-FROM jobs WHERE 1=1`
+SELECT j.id, j.fixflow_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
+       COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
+       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.mr_url,''),
+       COALESCE(j.reject_reason,''), j.created_at, j.updated_at,
+       COALESCE(j.started_at,''), COALESCE(j.completed_at,''),
+       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,'')
+FROM jobs j
+LEFT JOIN issues i ON j.fixflow_issue_id = i.fixflow_issue_id
+WHERE 1=1`
 	var args []any
 	if project != "" {
-		q += ` AND project_name = ?`
+		q += ` AND j.project_name = ?`
 		args = append(args, project)
 	}
 	if state != "" && state != "all" {
-		q += ` AND state = ?`
+		q += ` AND j.state = ?`
 		args = append(args, state)
 	}
-	q += ` ORDER BY updated_at DESC`
+	q += ` ORDER BY j.updated_at DESC`
 
 	rows, err := s.Reader.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -176,6 +184,7 @@ FROM jobs WHERE 1=1`
 			&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
 			&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
 			&j.StartedAt, &j.CompletedAt,
+			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle,
 		); err != nil {
 			return nil, fmt.Errorf("scan job: %w", err)
 		}
@@ -442,6 +451,64 @@ FROM artifacts WHERE job_id = ? ORDER BY id ASC`
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// ResolveJobID resolves a full or partial job ID prefix to a single job ID.
+// Accepts full IDs (ff-job-2dad8b6b5f96e0df), short prefixes (2dad), or
+// prefixed short forms (ff-job-2dad). Returns an error if zero or multiple matches.
+func (s *Store) ResolveJobID(ctx context.Context, prefix string) (string, error) {
+	// Try exact match first.
+	var id string
+	err := s.Reader.QueryRowContext(ctx, `SELECT id FROM jobs WHERE id = ?`, prefix).Scan(&id)
+	if err == nil {
+		return id, nil
+	}
+
+	// Prefix match: try with and without ff-job- prefix.
+	like := prefix + "%"
+	if !strings.HasPrefix(prefix, "ff-job-") {
+		like = "ff-job-%" + prefix + "%"
+	}
+
+	rows, err := s.Reader.QueryContext(ctx, `SELECT id FROM jobs WHERE id LIKE ? ORDER BY updated_at DESC LIMIT 2`, like)
+	if err != nil {
+		return "", fmt.Errorf("resolve job ID %q: %w", prefix, err)
+	}
+	defer rows.Close()
+
+	var matches []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			return "", fmt.Errorf("scan job ID: %w", err)
+		}
+		matches = append(matches, m)
+	}
+
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("no job matching %q", prefix)
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("ambiguous job prefix %q — matches %s and others", prefix, matches[0])
+	}
+}
+
+// ShortID returns a human-friendly short form of a job ID (last 8 hex chars).
+func ShortID(id string) string {
+	// ff-job-2dad8b6b5f96e0df → 2dad8b6b
+	if strings.HasPrefix(id, "ff-job-") {
+		hex := id[7:]
+		if len(hex) >= 8 {
+			return hex[:8]
+		}
+		return hex
+	}
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
 
 // Helpers.
