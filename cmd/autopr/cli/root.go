@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 
 	"github.com/spf13/cobra"
 )
@@ -21,9 +21,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "ff",
-	Short: "FixFlow — autonomous issue-to-code daemon",
-	Long:  "FixFlow processes GitLab/GitHub issues through an LLM pipeline: plan → review → implement → test → human approval.",
+	Use:   "ap",
+	Short: "AutoPR — autonomous issue-to-PR daemon",
+	Long:  "AutoPR watches your GitLab/GitHub/Sentry issues, then uses an LLM to plan, implement, test, and push fixes — ready for human approval.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		level := slog.LevelInfo
 		if verbose {
@@ -36,7 +36,7 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgPath, "config", "c", "fixflow.toml", "config file path")
+	rootCmd.PersistentFlags().StringVarP(&cfgPath, "config", "c", "autopr.toml", "config file path")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "enable debug logging")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output JSON")
 }

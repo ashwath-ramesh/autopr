@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 CREATE TABLE IF NOT EXISTS issues (
-    fixflow_issue_id  TEXT PRIMARY KEY,
+    autopr_issue_id   TEXT PRIMARY KEY,
     project_name      TEXT NOT NULL,
     source            TEXT NOT NULL CHECK(source IN ('gitlab', 'github', 'sentry')),
     source_issue_id   TEXT NOT NULL,
@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS issues (
 );
 
 CREATE TABLE IF NOT EXISTS jobs (
-    id               TEXT PRIMARY KEY,
-    fixflow_issue_id TEXT NOT NULL REFERENCES issues(fixflow_issue_id) ON DELETE RESTRICT,
+    id              TEXT PRIMARY KEY,
+    autopr_issue_id TEXT NOT NULL REFERENCES issues(autopr_issue_id) ON DELETE RESTRICT,
     project_name     TEXT NOT NULL,
     state            TEXT NOT NULL DEFAULT 'queued'
         CHECK(state IN ('queued','planning','implementing','reviewing','testing','ready','approved','rejected','failed')),
@@ -51,10 +51,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
-CREATE INDEX IF NOT EXISTS idx_jobs_issue ON jobs(fixflow_issue_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_issue ON jobs(autopr_issue_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_state_project ON jobs(state, project_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active_per_issue
-    ON jobs(fixflow_issue_id)
+    ON jobs(autopr_issue_id)
     WHERE state NOT IN ('approved', 'rejected', 'failed');
 
 CREATE TABLE IF NOT EXISTS llm_sessions (
@@ -81,7 +81,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_job ON llm_sessions(job_id);
 CREATE TABLE IF NOT EXISTS artifacts (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     job_id           TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
-    fixflow_issue_id TEXT NOT NULL,
+    autopr_issue_id  TEXT NOT NULL,
     kind             TEXT NOT NULL CHECK(kind IN ('plan','plan_review','code_review','test_output')),
     content          TEXT NOT NULL,
     iteration        INTEGER NOT NULL DEFAULT 0,

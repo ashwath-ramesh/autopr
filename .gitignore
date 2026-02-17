@@ -1,6 +1,6 @@
 # Config and secrets
 .env
-fixflow.toml
+autopr.toml
 *.pid
 
 # Database
@@ -11,7 +11,7 @@ fixflow.toml
 *.sqlite3
 
 # Build output
-ff
+ap
 
 # Runtime
 .repos/

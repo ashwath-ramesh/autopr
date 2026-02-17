@@ -12,13 +12,13 @@ import (
 	"syscall"
 	"time"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
-	"fixflow/internal/issuesync"
-	"fixflow/internal/llm"
-	"fixflow/internal/pipeline"
-	"fixflow/internal/webhook"
-	"fixflow/internal/worker"
+	"autopr/internal/config"
+	"autopr/internal/db"
+	"autopr/internal/issuesync"
+	"autopr/internal/llm"
+	"autopr/internal/pipeline"
+	"autopr/internal/webhook"
+	"autopr/internal/worker"
 )
 
 // Run starts the daemon: webhook server + worker pool + sync loop.

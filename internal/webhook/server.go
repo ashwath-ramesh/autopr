@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 )
 
 const maxBodySize = 1 << 20 // 1MB
@@ -153,7 +153,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Skip self-created mirror issues.
-	if containsFFMarker(event.ObjectAttributes.Description) {
+	if containsAPMarker(event.ObjectAttributes.Description) {
 		slog.Debug("webhook: skipping self-created mirror issue", "iid", event.ObjectAttributes.IID)
 		w.WriteHeader(http.StatusAccepted)
 		return
@@ -220,8 +220,8 @@ func (s *Server) findProject(event gitlabIssueEvent) *config.ProjectConfig {
 	return nil
 }
 
-func containsFFMarker(desc string) bool {
-	return strings.Contains(desc, "ff-id:") || strings.Contains(desc, "ff-sentry-issue:")
+func containsAPMarker(desc string) bool {
+	return strings.Contains(desc, "ap-id:") || strings.Contains(desc, "ap-sentry-issue:")
 }
 
 // GitLab webhook payload types.

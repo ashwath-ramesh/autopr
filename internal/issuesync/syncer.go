@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 )
 
 // Syncer periodically pulls issues from configured sources.

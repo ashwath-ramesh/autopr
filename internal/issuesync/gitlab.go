@@ -10,8 +10,8 @@ import (
 	"net/url"
 	"strings"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 )
 
 func (s *Syncer) syncGitLab(ctx context.Context, p *config.ProjectConfig) error {
@@ -70,7 +70,7 @@ func (s *Syncer) syncGitLab(ctx context.Context, p *config.ProjectConfig) error 
 
 	var latestUpdated string
 	for _, issue := range issues {
-		// Skip issues created by fixflow (contain our marker).
+		// Skip issues created by autopr (contain our marker).
 		if containsMarker(issue.Description) {
 			continue
 		}
@@ -120,5 +120,5 @@ type gitlabIssue struct {
 }
 
 func containsMarker(s string) bool {
-	return strings.Contains(s, "ff-id:") || strings.Contains(s, "ff-sentry-issue:")
+	return strings.Contains(s, "ap-id:") || strings.Contains(s, "ap-sentry-issue:")
 }

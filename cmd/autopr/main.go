@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"fixflow/cmd/fixflow/cli"
+	"autopr/cmd/autopr/cli"
 )
 
 func main() {

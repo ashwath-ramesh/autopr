@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"os"
 
-	"fixflow/internal/daemon"
+	"autopr/internal/daemon"
 
 	"github.com/spf13/cobra"
 )
@@ -14,7 +14,7 @@ var foreground bool
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Start the fixflow daemon",
+	Short: "Start the autopr daemon",
 	RunE:  runStart,
 }
 
@@ -48,6 +48,6 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon is already running (see %s)", cfg.Daemon.PIDFile)
 	}
 
-	fmt.Println("Starting fixflow daemon...")
+	fmt.Println("Starting autopr daemon...")
 	return daemon.Run(cfg, foreground)
 }

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"syscall"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/glamour"
@@ -56,7 +56,7 @@ var (
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
-// Model is the BubbleTea model for the FixFlow TUI.
+// Model is the BubbleTea model for the AutoPR TUI.
 //
 // Navigation depth:
 //
@@ -418,7 +418,7 @@ func (m Model) listView() string {
 	w := m.cw()
 
 	// ── Title bar ──
-	b.WriteString(titleStyle.Render("FIXFLOW"))
+	b.WriteString(titleStyle.Render("AUTOPR"))
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(strings.Repeat("─", w)))
 	b.WriteString("\n\n")
@@ -550,7 +550,7 @@ func (m Model) detailView() string {
 	if job.IssueSource != "" && job.SourceIssueID != "" {
 		kv("Issue", fmt.Sprintf("%s #%s", capitalize(job.IssueSource), job.SourceIssueID))
 	} else {
-		kv("Issue", job.FixFlowIssueID)
+		kv("Issue", job.AutoPRIssueID)
 	}
 	if job.IssueTitle != "" {
 		kv("Title", job.IssueTitle)

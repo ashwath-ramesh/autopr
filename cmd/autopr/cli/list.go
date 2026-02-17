@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"fixflow/internal/db"
+	"autopr/internal/db"
 
 	"github.com/spf13/cobra"
 )

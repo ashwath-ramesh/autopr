@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	"fixflow/internal/tui"
+	"autopr/internal/tui"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"

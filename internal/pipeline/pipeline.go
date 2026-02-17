@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"path/filepath"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
-	"fixflow/internal/git"
-	"fixflow/internal/llm"
+	"autopr/internal/config"
+	"autopr/internal/db"
+	"autopr/internal/git"
+	"autopr/internal/llm"
 )
 
 // errReviewChangesRequested signals that code review requested changes.
@@ -34,7 +34,7 @@ func (r *Runner) Run(ctx context.Context, jobID string) error {
 		return err
 	}
 
-	issue, err := r.store.GetIssueByFFID(ctx, job.FixFlowIssueID)
+	issue, err := r.store.GetIssueByAPID(ctx, job.AutoPRIssueID)
 	if err != nil {
 		return fmt.Errorf("get issue for job %s: %w", jobID, err)
 	}
@@ -48,7 +48,7 @@ func (r *Runner) Run(ctx context.Context, jobID string) error {
 	token := r.tokenForProject(projectCfg)
 
 	// Clone repo directly for this job (regular clone, not a worktree).
-	branchName := fmt.Sprintf("fixflow/%s", jobID)
+	branchName := fmt.Sprintf("autopr/%s", jobID)
 	worktreePath := filepath.Join(r.cfg.ReposRoot, "worktrees", jobID)
 
 	if job.WorktreePath == "" {

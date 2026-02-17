@@ -12,7 +12,7 @@ import (
 )
 
 type Issue struct {
-	FixFlowIssueID string
+	AutoPRIssueID string
 	ProjectName    string
 	Source         string
 	SourceIssueID  string
@@ -40,7 +40,7 @@ type IssueUpsert struct {
 }
 
 func (s *Store) UpsertIssue(ctx context.Context, in IssueUpsert) (string, error) {
-	newID, err := newFixFlowIssueID()
+	newID, err := newAutoPRIssueID()
 	if err != nil {
 		return "", err
 	}
@@ -60,7 +60,7 @@ func (s *Store) UpsertIssue(ctx context.Context, in IssueUpsert) (string, error)
 	}
 	const q = `
 INSERT INTO issues(
-  fixflow_issue_id, project_name, source, source_issue_id, title, body, url, state,
+  autopr_issue_id, project_name, source, source_issue_id, title, body, url, state,
   labels_json, source_meta_json, source_updated_at, synced_at
 ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(project_name, source, source_issue_id) DO UPDATE SET
@@ -72,7 +72,7 @@ ON CONFLICT(project_name, source, source_issue_id) DO UPDATE SET
   source_meta_json=excluded.source_meta_json,
   source_updated_at=excluded.source_updated_at,
   synced_at=excluded.synced_at
-RETURNING fixflow_issue_id`
+RETURNING autopr_issue_id`
 	var actualID string
 	err = s.Writer.QueryRowContext(ctx, q,
 		newID, in.ProjectName, in.Source, in.SourceIssueID, in.Title, in.Body, in.URL, in.State,
@@ -84,22 +84,22 @@ RETURNING fixflow_issue_id`
 	return actualID, nil
 }
 
-func (s *Store) GetIssueByFFID(ctx context.Context, fixflowID string) (Issue, error) {
+func (s *Store) GetIssueByAPID(ctx context.Context, autoprID string) (Issue, error) {
 	const q = `
-SELECT fixflow_issue_id, project_name, source, source_issue_id, title, body, url, state,
+SELECT autopr_issue_id, project_name, source, source_issue_id, title, body, url, state,
        labels_json, source_meta_json, source_updated_at, synced_at
-FROM issues WHERE fixflow_issue_id = ?`
+FROM issues WHERE autopr_issue_id = ?`
 	var it Issue
-	err := s.Reader.QueryRowContext(ctx, q, fixflowID).Scan(
-		&it.FixFlowIssueID, &it.ProjectName, &it.Source, &it.SourceIssueID,
+	err := s.Reader.QueryRowContext(ctx, q, autoprID).Scan(
+		&it.AutoPRIssueID, &it.ProjectName, &it.Source, &it.SourceIssueID,
 		&it.Title, &it.Body, &it.URL, &it.State,
 		&it.LabelsJSON, &it.SourceMetaJSON, &it.SourceUpdated, &it.SyncedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return Issue{}, fmt.Errorf("issue %s not found", fixflowID)
+			return Issue{}, fmt.Errorf("issue %s not found", autoprID)
 		}
-		return Issue{}, fmt.Errorf("get issue %s: %w", fixflowID, err)
+		return Issue{}, fmt.Errorf("get issue %s: %w", autoprID, err)
 	}
 	return it, nil
 }
@@ -139,10 +139,10 @@ func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
-func newFixFlowIssueID() (string, error) {
+func newAutoPRIssueID() (string, error) {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate fixflow_issue_id: %w", err)
+		return "", fmt.Errorf("generate autopr_issue_id: %w", err)
 	}
-	return "ff-" + strings.ToLower(hex.EncodeToString(buf)), nil
+	return "ap-" + strings.ToLower(hex.EncodeToString(buf)), nil
 }

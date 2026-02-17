@@ -1,18 +1,18 @@
-# FixFlow Configuration
-# Copy to fixflow.toml and customize.
+# AutoPR Configuration
+# Copy to autopr.toml and customize.
 
-db_path = "fixflow.db"
+db_path = "autopr.db"
 repos_root = ".repos"
 log_level = "info"         # debug, info, warn, error
-# log_file = "fixflow.log" # Uncomment to log to file instead of stderr
+# log_file = "autopr.log" # Uncomment to log to file instead of stderr
 
 [daemon]
 webhook_port = 8080
-# webhook_secret = ""      # Set via FIXFLOW_WEBHOOK_SECRET env var
+# webhook_secret = ""      # Set via AUTOPR_WEBHOOK_SECRET env var
 max_workers = 3
 max_iterations = 3
 sync_interval = "5m"
-pid_file = "fixflow.pid"
+pid_file = "autopr.pid"
 
 [tokens]
 # Prefer environment variables: GITLAB_TOKEN, GITHUB_TOKEN, SENTRY_TOKEN

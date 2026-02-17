@@ -5,14 +5,14 @@ import (
 	"os"
 	"syscall"
 
-	"fixflow/internal/daemon"
+	"autopr/internal/daemon"
 
 	"github.com/spf13/cobra"
 )
 
 var stopCmd = &cobra.Command{
 	Use:   "stop",
-	Short: "Stop the fixflow daemon",
+	Short: "Stop the autopr daemon",
 	RunE:  runStop,
 }
 

@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 )
 
 func (s *Syncer) syncSentry(ctx context.Context, p *config.ProjectConfig) error {

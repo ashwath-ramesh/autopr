@@ -10,10 +10,10 @@ import (
 func TestLoadParsesProjectsAndDefaults(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, "fixflow.toml")
+	cfgPath := filepath.Join(tmp, "autopr.toml")
 
 	content := `
-db_path = "fixflow.db"
+db_path = "autopr.db"
 
 [[projects]]
 name = "myproject"
@@ -59,7 +59,7 @@ test_cmd = "go test ./..."
 
 func TestLoadEnvOverrides(t *testing.T) {
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, "fixflow.toml")
+	cfgPath := filepath.Join(tmp, "autopr.toml")
 
 	content := `
 [[projects]]
@@ -75,7 +75,7 @@ test_cmd = "make test"
 		t.Fatalf("write config: %v", err)
 	}
 
-	t.Setenv("FIXFLOW_WEBHOOK_SECRET", "mysecret")
+	t.Setenv("AUTOPR_WEBHOOK_SECRET", "mysecret")
 	t.Setenv("GITLAB_TOKEN", "gltoken")
 
 	cfg, err := Load(cfgPath)
@@ -94,7 +94,7 @@ test_cmd = "make test"
 func TestLoadFailsForNoProjects(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, "fixflow.toml")
+	cfgPath := filepath.Join(tmp, "autopr.toml")
 
 	if err := os.WriteFile(cfgPath, []byte(`log_level = "info"`), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -112,7 +112,7 @@ func TestLoadFailsForNoProjects(t *testing.T) {
 func TestLoadFailsForInvalidProvider(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
-	cfgPath := filepath.Join(tmp, "fixflow.toml")
+	cfgPath := filepath.Join(tmp, "autopr.toml")
 
 	content := `
 [llm]

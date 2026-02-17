@@ -1,6 +1,6 @@
-# FixFlow
+# AutoPR
 
-Autonomous issue-to-code daemon. FixFlow watches your GitLab, GitHub, and Sentry issues,
+Autonomous issue-to-PR daemon. AutoPR watches your GitLab, GitHub, and Sentry issues,
 then uses an LLM (Claude or Codex CLI) to plan, implement, test, and push fixes — ready
 for human approval.
 
@@ -9,7 +9,7 @@ for human approval.
 ```
                               ┌─────────────┐
   GitLab webhook ────────────>│             │
-  GitHub/Sentry sync loop ──>│  ff daemon   │──> clone repo, create branch
+  GitHub/Sentry sync loop ──>│  ap daemon   │──> clone repo, create branch
                               │             │    plan → implement → review → test
                               └──────┬──────┘
                                      │
@@ -58,7 +58,7 @@ npm install -g @anthropic-ai/claude-code
 Requires an Anthropic API key. Set `ANTHROPIC_API_KEY` in your environment.
 A Claude Max subscription or API credits is needed.
 
-Configure which provider to use in `fixflow.toml`:
+Configure which provider to use in `autopr.toml`:
 
 ```toml
 [llm]
@@ -75,43 +75,43 @@ provider = "codex"   # or "claude"
 
 ```bash
 # Build
-go build -o ff ./cmd/fixflow
+go build -o ap ./cmd/autopr
 
 # Initialize config + database
-./ff init
+./ap init
 
 # Edit the config
-./ff config   # opens fixflow.toml in $EDITOR
+./ap config   # opens autopr.toml in $EDITOR
 
 # Set tokens via env vars (never commit these)
 export GITLAB_TOKEN="glpat-..."
 export GITHUB_TOKEN="ghp_..."
 export SENTRY_TOKEN="sntrys_..."
-export FIXFLOW_WEBHOOK_SECRET="your-secret"
+export AUTOPR_WEBHOOK_SECRET="your-secret"
 
 # Start the daemon
-./ff start
+./ap start
 
 # Or run in foreground for debugging
-./ff start -f
+./ap start -f
 ```
 
 ## Configuration
 
-FixFlow uses a single `fixflow.toml` file. Running `ff init` creates a starter template.
+AutoPR uses a single `autopr.toml` file. Running `ap init` creates a starter template.
 
 ```toml
-db_path = "fixflow.db"
+db_path = "autopr.db"
 repos_root = ".repos"
 log_level = "info"         # debug, info, warn, error
-# log_file = "fixflow.log" # uncomment to log to file
+# log_file = "autopr.log" # uncomment to log to file
 
 [daemon]
 webhook_port = 8080
 max_workers = 3
 max_iterations = 3         # implement<->review retries
 sync_interval = "5m"       # GitHub/Sentry polling interval
-pid_file = "fixflow.pid"
+pid_file = "autopr.pid"
 
 [tokens]
 # Prefer env vars: GITLAB_TOKEN, GITHUB_TOKEN, SENTRY_TOKEN
@@ -153,7 +153,7 @@ base_branch = "main"
 | `GITLAB_TOKEN` | `[tokens] gitlab` |
 | `GITHUB_TOKEN` | `[tokens] github` |
 | `SENTRY_TOKEN` | `[tokens] sentry` |
-| `FIXFLOW_WEBHOOK_SECRET` | `[daemon] webhook_secret` |
+| `AUTOPR_WEBHOOK_SECRET` | `[daemon] webhook_secret` |
 
 > **Note:** `GITHUB_TOKEN` requires a fine-grained PAT with `Contents: Read and write` + `Issues: Read-only`
 > scoped to the target repo. With read-only contents access, the daemon will work end-to-end but
@@ -166,55 +166,55 @@ base_branch = "main"
 1. Add a `[[projects]]` block with `[projects.gitlab]` containing your `project_id`.
 2. In GitLab, go to **Settings > Webhooks** and add:
    - **URL:** `http://<your-host>:8080/webhook`
-   - **Secret token:** same value as `FIXFLOW_WEBHOOK_SECRET`
+   - **Secret token:** same value as `AUTOPR_WEBHOOK_SECRET`
    - **Trigger:** Issue events
-3. When an issue is opened or reopened, FixFlow creates a job automatically.
+3. When an issue is opened or reopened, AutoPR creates a job automatically.
 
 ### GitHub (polling)
 
 1. Add `[projects.github]` with `owner` and `repo`.
-2. FixFlow polls for open issues every `sync_interval`.
+2. AutoPR polls for open issues every `sync_interval`.
 3. New issues are picked up and processed automatically.
 
 ### Sentry (polling)
 
 1. Add `[projects.sentry]` with `org` and `project`.
-2. FixFlow polls for unresolved issues every `sync_interval`.
+2. AutoPR polls for unresolved issues every `sync_interval`.
 
 ## CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `ff init` | Create config template and initialize database |
-| `ff start [-f]` | Start the daemon (`-f` for foreground) |
-| `ff stop` | Gracefully stop the daemon |
-| `ff status` | Show daemon status and job counts by state |
-| `ff list [--project X] [--state Y]` | List jobs with optional filters |
-| `ff logs <job-id>` | Show full session history, artifacts, and tokens |
-| `ff approve <job-id>` | Approve a job in `ready` state |
-| `ff reject <job-id> [-r reason]` | Reject a job in `ready` state |
-| `ff retry <job-id> [-n notes]` | Re-queue a `failed` or `rejected` job |
-| `ff config` | Open `fixflow.toml` in `$EDITOR` |
-| `ff tui` | Interactive terminal dashboard (see below) |
+| `ap init` | Create config template and initialize database |
+| `ap start [-f]` | Start the daemon (`-f` for foreground) |
+| `ap stop` | Gracefully stop the daemon |
+| `ap status` | Show daemon status and job counts by state |
+| `ap list [--project X] [--state Y]` | List jobs with optional filters |
+| `ap logs <job-id>` | Show full session history, artifacts, and tokens |
+| `ap approve <job-id>` | Approve a job in `ready` state |
+| `ap reject <job-id> [-r reason]` | Reject a job in `ready` state |
+| `ap retry <job-id> [-n notes]` | Re-queue a `failed` or `rejected` job |
+| `ap config` | Open `autopr.toml` in `$EDITOR` |
+| `ap tui` | Interactive terminal dashboard (see below) |
 
 All commands accept `--json` for machine-readable output and `-v` for debug logging.
 
 ### Job ID Prefix Matching
 
-`ff list` shows an 8-character short job ID (e.g. `2dad8b6b`). All action commands
+`ap list` shows an 8-character short job ID (e.g. `2dad8b6b`). All action commands
 accept a prefix of any length — just enough to be unambiguous:
 
 ```bash
-ff logs 2dad          # matches ff-job-2dad8b6b...
-ff approve 2d         # works if only one job starts with "2d"
-ff reject 2dad8b6b    # full short ID also works
+ap logs 2dad          # matches ap-job-2dad8b6b...
+ap approve 2d         # works if only one job starts with "2d"
+ap reject 2dad8b6b    # full short ID also works
 ```
 
-For automation, use `ff list --json` which returns full job IDs.
+For automation, use `ap list --json` which returns full job IDs.
 
 ## TUI Dashboard
 
-`ff tui` launches an interactive terminal UI with keyboard navigation.
+`ap tui` launches an interactive terminal UI with keyboard navigation.
 
 **Level 1 — Job List:** Dashboard header showing daemon status, sync interval,
 worker count, and job state counters. Job table shows short job ID, state, project,
@@ -248,12 +248,12 @@ queued → planning → implementing → reviewing → testing → ready
 ready → approved    (human approves)
 ready → rejected    (human rejects)
 any   → failed      (error)
-failed/rejected → queued  (ff retry)
+failed/rejected → queued  (ap retry)
 ```
 
 ## Custom Prompts
 
-Override default prompts per project in `fixflow.toml`:
+Override default prompts per project in `autopr.toml`:
 
 ```toml
 [projects.prompts]
@@ -284,7 +284,7 @@ Returns JSON with `status`, `uptime_seconds`, and `job_queue_depth`.
 ## Architecture
 
 ```
-cmd/fixflow/           CLI (cobra)
+cmd/autopr/            CLI (cobra)
 internal/
   config/              TOML config loader with env overrides
   daemon/              Daemon lifecycle, PID file, signal handling
@@ -309,6 +309,6 @@ go test ./...
 ## Resetting the Database
 
 ```bash
-rm -f fixflow.db
-./ff init   # re-creates schema
+rm -f autopr.db
+./ap init   # re-creates schema
 ```

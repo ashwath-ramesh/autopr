@@ -7,9 +7,9 @@ import (
 	"os/exec"
 	"strings"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
-	"fixflow/internal/git"
+	"autopr/internal/config"
+	"autopr/internal/db"
+	"autopr/internal/git"
 )
 
 // Default prompt templates.
@@ -97,7 +97,7 @@ func (r *Runner) runPlan(ctx context.Context, jobID string, issue db.Issue, proj
 	}
 
 	// Store the plan as an artifact.
-	_, err = r.store.CreateArtifact(ctx, jobID, issue.FixFlowIssueID, "plan", resp.Text, job.Iteration, "")
+	_, err = r.store.CreateArtifact(ctx, jobID, issue.AutoPRIssueID, "plan", resp.Text, job.Iteration, "")
 	if err != nil {
 		return fmt.Errorf("store plan artifact: %w", err)
 	}
@@ -183,7 +183,7 @@ func (r *Runner) runCodeReview(ctx context.Context, jobID string, issue db.Issue
 	}
 
 	// Store the review as an artifact.
-	_, err = r.store.CreateArtifact(ctx, jobID, issue.FixFlowIssueID, "code_review", resp.Text, job.Iteration, "")
+	_, err = r.store.CreateArtifact(ctx, jobID, issue.AutoPRIssueID, "code_review", resp.Text, job.Iteration, "")
 	if err != nil {
 		return fmt.Errorf("store review artifact: %w", err)
 	}
@@ -208,7 +208,7 @@ func (r *Runner) runTests(ctx context.Context, jobID string, issue db.Issue, pro
 	testOutput, testErr := runTestCommand(ctx, workDir, projectCfg.TestCmd)
 
 	// Store test output as artifact.
-	_, err = r.store.CreateArtifact(ctx, jobID, issue.FixFlowIssueID, "test_output", testOutput, job.Iteration, "")
+	_, err = r.store.CreateArtifact(ctx, jobID, issue.AutoPRIssueID, "test_output", testOutput, job.Iteration, "")
 	if err != nil {
 		slog.Warn("failed to store test artifact", "err", err)
 	}

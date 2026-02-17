@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"net/url"
 
-	"fixflow/internal/config"
-	"fixflow/internal/db"
+	"autopr/internal/config"
+	"autopr/internal/db"
 )
 
 func (s *Syncer) syncGitHub(ctx context.Context, p *config.ProjectConfig) error {

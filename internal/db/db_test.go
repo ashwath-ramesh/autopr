@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-func TestUpsertIssueAssignsAndPreservesFixFlowIssueID(t *testing.T) {
+func TestUpsertIssueAssignsAndPreservesAutoPRIssueID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	store, err := Open(filepath.Join(tmp, "fixflow.db"))
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -29,8 +29,8 @@ func TestUpsertIssueAssignsAndPreservesFixFlowIssueID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert first: %v", err)
 	}
-	if firstID == "" || !strings.HasPrefix(firstID, "ff-") {
-		t.Fatalf("expected ff- prefixed id, got %q", firstID)
+	if firstID == "" || !strings.HasPrefix(firstID, "ap-") {
+		t.Fatalf("expected ap- prefixed id, got %q", firstID)
 	}
 
 	secondID, err := store.UpsertIssue(ctx, IssueUpsert{
@@ -45,10 +45,10 @@ func TestUpsertIssueAssignsAndPreservesFixFlowIssueID(t *testing.T) {
 		t.Fatalf("upsert second: %v", err)
 	}
 	if secondID != firstID {
-		t.Fatalf("expected stable fixflow id, first=%s second=%s", firstID, secondID)
+		t.Fatalf("expected stable autopr id, first=%s second=%s", firstID, secondID)
 	}
 
-	it, err := store.GetIssueByFFID(ctx, firstID)
+	it, err := store.GetIssueByAPID(ctx, firstID)
 	if err != nil {
 		t.Fatalf("get issue: %v", err)
 	}
@@ -57,18 +57,18 @@ func TestUpsertIssueAssignsAndPreservesFixFlowIssueID(t *testing.T) {
 	}
 }
 
-func TestGetIssueByFFIDMissingReturnsError(t *testing.T) {
+func TestGetIssueByAPIDMissingReturnsError(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	store, err := Open(filepath.Join(tmp, "fixflow.db"))
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	defer store.Close()
 
-	_, err = store.GetIssueByFFID(ctx, "missing")
+	_, err = store.GetIssueByAPID(ctx, "missing")
 	if err == nil {
 		t.Fatalf("expected error for missing issue")
 	}
@@ -82,7 +82,7 @@ func TestJobStateTransitions(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	store, err := Open(filepath.Join(tmp, "fixflow.db"))
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -105,8 +105,8 @@ func TestJobStateTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if !strings.HasPrefix(jobID, "ff-job-") {
-		t.Fatalf("expected ff-job- prefix, got %q", jobID)
+	if !strings.HasPrefix(jobID, "ap-job-") {
+		t.Fatalf("expected ap-job- prefix, got %q", jobID)
 	}
 
 	// Claim job (queued -> planning).
@@ -148,7 +148,7 @@ func TestHasActiveJobForIssue(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	store, err := Open(filepath.Join(tmp, "fixflow.db"))
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRecoverInFlightJobs(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	store, err := Open(filepath.Join(tmp, "fixflow.db"))
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}

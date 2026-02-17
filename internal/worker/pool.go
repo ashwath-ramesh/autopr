@@ -6,8 +6,8 @@ import (
 	"runtime/debug"
 	"sync"
 
-	"fixflow/internal/db"
-	"fixflow/internal/pipeline"
+	"autopr/internal/db"
+	"autopr/internal/pipeline"
 )
 
 // Pool manages N worker goroutines that process jobs.

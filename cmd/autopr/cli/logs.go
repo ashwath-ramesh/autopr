@@ -59,7 +59,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	// Fetch linked issue for source info.
-	issue, issueErr := store.GetIssueByFFID(cmd.Context(), job.FixFlowIssueID)
+	issue, issueErr := store.GetIssueByAPID(cmd.Context(), job.AutoPRIssueID)
 
 	fmt.Printf("Job: %s  State: %s  Iteration: %d/%d\n", job.ID, job.State, job.Iteration, job.MaxIterations)
 	if issueErr == nil && issue.Source != "" && issue.SourceIssueID != "" {
@@ -69,7 +69,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 			fmt.Printf("Title: %s\n", issue.Title)
 		}
 	} else {
-		fmt.Printf("Issue: %s  Project: %s\n", job.FixFlowIssueID, job.ProjectName)
+		fmt.Printf("Issue: %s  Project: %s\n", job.AutoPRIssueID, job.ProjectName)
 	}
 	if job.BranchName != "" {
 		fmt.Printf("Branch: %s  Commit: %s\n", job.BranchName, job.CommitSHA)

@@ -40,25 +40,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	fmt.Printf("Database initialized: %s\n", cfg.DBPath)
-	fmt.Println("Edit fixflow.toml to configure your projects, then run: ff start")
+	fmt.Println("Edit autopr.toml to configure your projects, then run: ap start")
 	return nil
 }
 
-const configTemplate = `# FixFlow configuration
-# See: https://github.com/fixflow/fixflow
+const configTemplate = `# AutoPR configuration
+# See: https://github.com/ashwath-ramesh/autopr
 
-db_path = "fixflow.db"
+db_path = "autopr.db"
 repos_root = ".repos"
 log_level = "info"              # debug|info|warn|error
 log_file = ""                   # empty = stderr only
 
 [daemon]
 webhook_port = 8080
-webhook_secret = ""             # override via FIXFLOW_WEBHOOK_SECRET env var
+webhook_secret = ""             # override via AUTOPR_WEBHOOK_SECRET env var
 max_workers = 3
 max_iterations = 3              # implement<->review loop default
 sync_interval = "5m"            # GitHub/Sentry poll interval
-pid_file = "fixflow.pid"
+pid_file = "autopr.pid"
 
 [tokens]
 # Override via env: GITLAB_TOKEN, GITHUB_TOKEN, SENTRY_TOKEN

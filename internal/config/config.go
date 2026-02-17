@@ -102,7 +102,7 @@ func Load(path string) (*Config, error) {
 
 func applyDefaults(cfg *Config) {
 	if cfg.DBPath == "" {
-		cfg.DBPath = "fixflow.db"
+		cfg.DBPath = "autopr.db"
 	}
 	if cfg.ReposRoot == "" {
 		cfg.ReposRoot = ".repos"
@@ -123,7 +123,7 @@ func applyDefaults(cfg *Config) {
 		cfg.Daemon.SyncInterval = "5m"
 	}
 	if cfg.Daemon.PIDFile == "" {
-		cfg.Daemon.PIDFile = "fixflow.pid"
+		cfg.Daemon.PIDFile = "autopr.pid"
 	}
 	if cfg.Sentry.BaseURL == "" {
 		cfg.Sentry.BaseURL = "https://sentry.io"
@@ -139,7 +139,7 @@ func applyDefaults(cfg *Config) {
 }
 
 func applyEnvOverrides(cfg *Config) {
-	if v := os.Getenv("FIXFLOW_WEBHOOK_SECRET"); v != "" {
+	if v := os.Getenv("AUTOPR_WEBHOOK_SECRET"); v != "" {
 		cfg.Daemon.WebhookSecret = v
 	}
 	if v := os.Getenv("GITLAB_TOKEN"); v != "" {

@@ -39,7 +39,7 @@ func StepForState(state string) string {
 
 type Job struct {
 	ID              string
-	FixFlowIssueID  string
+	AutoPRIssueID  string
 	ProjectName     string
 	State           string
 	Iteration       int
@@ -62,13 +62,13 @@ type Job struct {
 	IssueTitle    string
 }
 
-func (s *Store) CreateJob(ctx context.Context, fixflowIssueID, projectName string, maxIterations int) (string, error) {
+func (s *Store) CreateJob(ctx context.Context, autoprIssueID, projectName string, maxIterations int) (string, error) {
 	id, err := newJobID()
 	if err != nil {
 		return "", err
 	}
-	const q = `INSERT INTO jobs(id, fixflow_issue_id, project_name, state, max_iterations) VALUES(?,?,?,'queued',?)`
-	_, err = s.Writer.ExecContext(ctx, q, id, fixflowIssueID, projectName, maxIterations)
+	const q = `INSERT INTO jobs(id, autopr_issue_id, project_name, state, max_iterations) VALUES(?,?,?,'queued',?)`
+	_, err = s.Writer.ExecContext(ctx, q, id, autoprIssueID, projectName, maxIterations)
 	if err != nil {
 		return "", fmt.Errorf("create job: %w", err)
 	}
@@ -124,7 +124,7 @@ func (s *Store) TransitionState(ctx context.Context, jobID, from, to string) err
 
 func (s *Store) GetJob(ctx context.Context, jobID string) (Job, error) {
 	const q = `
-SELECT id, fixflow_issue_id, project_name, state, iteration, max_iterations,
+SELECT id, autopr_issue_id, project_name, state, iteration, max_iterations,
        COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
        COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(mr_url,''),
        COALESCE(reject_reason,''), created_at, updated_at,
@@ -132,7 +132,7 @@ SELECT id, fixflow_issue_id, project_name, state, iteration, max_iterations,
 FROM jobs WHERE id = ?`
 	var j Job
 	err := s.Reader.QueryRowContext(ctx, q, jobID).Scan(
-		&j.ID, &j.FixFlowIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+		&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
 		&j.WorktreePath, &j.BranchName, &j.CommitSHA,
 		&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
 		&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
@@ -149,14 +149,14 @@ FROM jobs WHERE id = ?`
 
 func (s *Store) ListJobs(ctx context.Context, project, state string) ([]Job, error) {
 	q := `
-SELECT j.id, j.fixflow_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
+SELECT j.id, j.autopr_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
        COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
        COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.mr_url,''),
        COALESCE(j.reject_reason,''), j.created_at, j.updated_at,
        COALESCE(j.started_at,''), COALESCE(j.completed_at,''),
        COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,'')
 FROM jobs j
-LEFT JOIN issues i ON j.fixflow_issue_id = i.fixflow_issue_id
+LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id
 WHERE 1=1`
 	var args []any
 	if project != "" {
@@ -179,7 +179,7 @@ WHERE 1=1`
 	for rows.Next() {
 		var j Job
 		if err := rows.Scan(
-			&j.ID, &j.FixFlowIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+			&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
 			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
 			&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
 			&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
@@ -240,10 +240,10 @@ WHERE id = ? AND state IN ('failed', 'rejected')`, notes, jobID)
 }
 
 // HasActiveJobForIssue checks if there's already an active job for an issue.
-func (s *Store) HasActiveJobForIssue(ctx context.Context, fixflowIssueID string) (bool, error) {
-	const q = `SELECT COUNT(*) FROM jobs WHERE fixflow_issue_id = ? AND state NOT IN ('approved', 'rejected', 'failed')`
+func (s *Store) HasActiveJobForIssue(ctx context.Context, autoprIssueID string) (bool, error) {
+	const q = `SELECT COUNT(*) FROM jobs WHERE autopr_issue_id = ? AND state NOT IN ('approved', 'rejected', 'failed')`
 	var count int
-	err := s.Reader.QueryRowContext(ctx, q, fixflowIssueID).Scan(&count)
+	err := s.Reader.QueryRowContext(ctx, q, autoprIssueID).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check active job: %w", err)
 	}
@@ -398,7 +398,7 @@ FROM llm_sessions WHERE id = ?`
 type Artifact struct {
 	ID              int
 	JobID           string
-	FixFlowIssueID  string
+	AutoPRIssueID  string
 	Kind            string
 	Content         string
 	Iteration       int
@@ -406,9 +406,9 @@ type Artifact struct {
 	CreatedAt       string
 }
 
-func (s *Store) CreateArtifact(ctx context.Context, jobID, fixflowIssueID, kind, content string, iteration int, commitSHA string) (int64, error) {
-	const q = `INSERT INTO artifacts(job_id, fixflow_issue_id, kind, content, iteration, commit_sha) VALUES(?,?,?,?,?,?)`
-	res, err := s.Writer.ExecContext(ctx, q, jobID, fixflowIssueID, kind, content, iteration, commitSHA)
+func (s *Store) CreateArtifact(ctx context.Context, jobID, autoprIssueID, kind, content string, iteration int, commitSHA string) (int64, error) {
+	const q = `INSERT INTO artifacts(job_id, autopr_issue_id, kind, content, iteration, commit_sha) VALUES(?,?,?,?,?,?)`
+	res, err := s.Writer.ExecContext(ctx, q, jobID, autoprIssueID, kind, content, iteration, commitSHA)
 	if err != nil {
 		return 0, fmt.Errorf("create artifact: %w", err)
 	}
@@ -417,11 +417,11 @@ func (s *Store) CreateArtifact(ctx context.Context, jobID, fixflowIssueID, kind,
 
 func (s *Store) GetLatestArtifact(ctx context.Context, jobID, kind string) (Artifact, error) {
 	const q = `
-SELECT id, job_id, fixflow_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
+SELECT id, job_id, autopr_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
 FROM artifacts WHERE job_id = ? AND kind = ? ORDER BY id DESC LIMIT 1`
 	var a Artifact
 	err := s.Reader.QueryRowContext(ctx, q, jobID, kind).Scan(
-		&a.ID, &a.JobID, &a.FixFlowIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt,
+		&a.ID, &a.JobID, &a.AutoPRIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -434,7 +434,7 @@ FROM artifacts WHERE job_id = ? AND kind = ? ORDER BY id DESC LIMIT 1`
 
 func (s *Store) ListArtifactsByJob(ctx context.Context, jobID string) ([]Artifact, error) {
 	const q = `
-SELECT id, job_id, fixflow_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
+SELECT id, job_id, autopr_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
 FROM artifacts WHERE job_id = ? ORDER BY id ASC`
 	rows, err := s.Reader.QueryContext(ctx, q, jobID)
 	if err != nil {
@@ -445,7 +445,7 @@ FROM artifacts WHERE job_id = ? ORDER BY id ASC`
 	var out []Artifact
 	for rows.Next() {
 		var a Artifact
-		if err := rows.Scan(&a.ID, &a.JobID, &a.FixFlowIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.JobID, &a.AutoPRIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan artifact: %w", err)
 		}
 		out = append(out, a)
@@ -454,8 +454,8 @@ FROM artifacts WHERE job_id = ? ORDER BY id ASC`
 }
 
 // ResolveJobID resolves a full or partial job ID prefix to a single job ID.
-// Accepts full IDs (ff-job-2dad8b6b5f96e0df), short prefixes (2dad), or
-// prefixed short forms (ff-job-2dad). Returns an error if zero or multiple matches.
+// Accepts full IDs (ap-job-2dad8b6b5f96e0df), short prefixes (2dad), or
+// prefixed short forms (ap-job-2dad). Returns an error if zero or multiple matches.
 func (s *Store) ResolveJobID(ctx context.Context, prefix string) (string, error) {
 	// Try exact match first.
 	var id string
@@ -464,10 +464,10 @@ func (s *Store) ResolveJobID(ctx context.Context, prefix string) (string, error)
 		return id, nil
 	}
 
-	// Prefix match: try with and without ff-job- prefix.
+	// Prefix match: try with and without ap-job- prefix.
 	like := prefix + "%"
-	if !strings.HasPrefix(prefix, "ff-job-") {
-		like = "ff-job-%" + prefix + "%"
+	if !strings.HasPrefix(prefix, "ap-job-") {
+		like = "ap-job-%" + prefix + "%"
 	}
 
 	rows, err := s.Reader.QueryContext(ctx, `SELECT id FROM jobs WHERE id LIKE ? ORDER BY updated_at DESC LIMIT 2`, like)
@@ -497,8 +497,8 @@ func (s *Store) ResolveJobID(ctx context.Context, prefix string) (string, error)
 
 // ShortID returns a human-friendly short form of a job ID (last 8 hex chars).
 func ShortID(id string) string {
-	// ff-job-2dad8b6b5f96e0df → 2dad8b6b
-	if strings.HasPrefix(id, "ff-job-") {
+	// ap-job-2dad8b6b5f96e0df → 2dad8b6b
+	if strings.HasPrefix(id, "ap-job-") {
 		hex := id[7:]
 		if len(hex) >= 8 {
 			return hex[:8]
@@ -518,5 +518,5 @@ func newJobID() (string, error) {
 	if _, err := rand.Read(buf); err != nil {
 		return "", fmt.Errorf("generate job id: %w", err)
 	}
-	return "ff-job-" + strings.ToLower(hex.EncodeToString(buf)), nil
+	return "ap-job-" + strings.ToLower(hex.EncodeToString(buf)), nil
 }

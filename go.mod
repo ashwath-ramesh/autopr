@@ -1,4 +1,4 @@
-module fixflow
+module autopr
 
 go 1.23.0
 
