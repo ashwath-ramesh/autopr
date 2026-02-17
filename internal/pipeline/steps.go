@@ -149,6 +149,15 @@ func (r *Runner) runImplement(ctx context.Context, jobID string, issue db.Issue,
 		return fmt.Errorf("implement step: %w", err)
 	}
 
+	// Safety-net commit: some LLM providers leave changes uncommitted.
+	sha, commitErr := git.CommitAll(ctx, workDir, "autopr: implement changes for "+issue.Title)
+	if commitErr != nil {
+		slog.Debug("safety-net commit skipped (nothing to commit)", "job", jobID)
+	} else {
+		slog.Info("safety-net commit created", "job", jobID, "sha", sha)
+		_ = r.store.UpdateJobField(ctx, jobID, "commit_sha", sha)
+	}
+
 	slog.Info("implement step completed", "job", jobID)
 	return nil
 }
@@ -214,7 +223,8 @@ func (r *Runner) runTests(ctx context.Context, jobID string, issue db.Issue, pro
 	}
 
 	if testErr != nil {
-		return fmt.Errorf("tests failed: %w", testErr)
+		slog.Info("tests failed", "job", jobID, "err", testErr)
+		return errTestsFailed
 	}
 
 	// Push branch.

@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     commit_sha       TEXT,
     human_notes      TEXT,
     error_message    TEXT,
-    mr_url           TEXT,
+    pr_url           TEXT,
     reject_reason    TEXT,
     created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
@@ -117,6 +117,9 @@ func (s *Store) createSchema() error {
 
 	// Migrations: add columns that may not exist in older schemas.
 	_, _ = s.Writer.Exec("ALTER TABLE llm_sessions ADD COLUMN prompt_text TEXT")
+	_, _ = s.Writer.Exec("ALTER TABLE jobs RENAME COLUMN mr_url TO pr_url")
+	_, _ = s.Writer.Exec("ALTER TABLE jobs ADD COLUMN pr_merged_at TEXT")
+	_, _ = s.Writer.Exec("ALTER TABLE jobs ADD COLUMN pr_closed_at TEXT")
 
 	return nil
 }
