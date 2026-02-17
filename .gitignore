@@ -1,0 +1,19 @@
+# Config and secrets
+.env
+fixflow.toml
+*.pid
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Build output
+ff
+
+# Runtime
+.repos/
+.worktrees/
+.gocache/
+.cache/
+.DS_Store

@@ -1,0 +1,386 @@
+package db
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"strings"
+)
+
+// ValidTransitions defines the allowed state machine transitions.
+var ValidTransitions = map[string][]string{
+	"queued":       {"planning"},
+	"planning":     {"implementing", "failed"},
+	"implementing": {"reviewing", "failed"},
+	"reviewing":    {"implementing", "testing", "failed"},
+	"testing":      {"ready", "failed"},
+	"ready":        {"approved", "rejected"},
+	"failed":       {"queued"},
+	"rejected":     {"queued"},
+}
+
+// StepForState derives the pipeline step name from job state.
+func StepForState(state string) string {
+	switch state {
+	case "planning":
+		return "plan"
+	case "implementing":
+		return "implement"
+	case "reviewing":
+		return "code_review"
+	case "testing":
+		return "tests"
+	default:
+		return ""
+	}
+}
+
+type Job struct {
+	ID              string
+	FixFlowIssueID  string
+	ProjectName     string
+	State           string
+	Iteration       int
+	MaxIterations   int
+	WorktreePath    string
+	BranchName      string
+	CommitSHA       string
+	HumanNotes      string
+	ErrorMessage    string
+	MRURL           string
+	RejectReason    string
+	CreatedAt       string
+	UpdatedAt       string
+	StartedAt       string
+	CompletedAt     string
+}
+
+func (s *Store) CreateJob(ctx context.Context, fixflowIssueID, projectName string, maxIterations int) (string, error) {
+	id, err := newJobID()
+	if err != nil {
+		return "", err
+	}
+	const q = `INSERT INTO jobs(id, fixflow_issue_id, project_name, state, max_iterations) VALUES(?,?,?,'queued',?)`
+	_, err = s.Writer.ExecContext(ctx, q, id, fixflowIssueID, projectName, maxIterations)
+	if err != nil {
+		return "", fmt.Errorf("create job: %w", err)
+	}
+	return id, nil
+}
+
+// ClaimJob atomically claims the next queued job. Returns empty string if none available.
+func (s *Store) ClaimJob(ctx context.Context) (string, error) {
+	const q = `
+UPDATE jobs SET state = 'planning', started_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = (SELECT id FROM jobs WHERE state = 'queued' ORDER BY created_at ASC LIMIT 1)
+RETURNING id`
+	var id string
+	err := s.Writer.QueryRowContext(ctx, q).Scan(&id)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", nil
+		}
+		return "", fmt.Errorf("claim job: %w", err)
+	}
+	return id, nil
+}
+
+// TransitionState validates and performs a state transition on a job.
+func (s *Store) TransitionState(ctx context.Context, jobID, from, to string) error {
+	allowed := ValidTransitions[from]
+	valid := false
+	for _, s := range allowed {
+		if s == to {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("invalid transition: %s -> %s", from, to)
+	}
+	extra := ""
+	if to == "approved" || to == "rejected" || to == "ready" || to == "failed" {
+		extra = ", completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')"
+	}
+	q := fmt.Sprintf(`UPDATE jobs SET state = ?, updated_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now')%s WHERE id = ? AND state = ?`, extra)
+	res, err := s.Writer.ExecContext(ctx, q, to, jobID, from)
+	if err != nil {
+		return fmt.Errorf("transition job %s %s->%s: %w", jobID, from, to, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %s not in state %s (concurrent modification?)", jobID, from)
+	}
+	return nil
+}
+
+func (s *Store) GetJob(ctx context.Context, jobID string) (Job, error) {
+	const q = `
+SELECT id, fixflow_issue_id, project_name, state, iteration, max_iterations,
+       COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
+       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(mr_url,''),
+       COALESCE(reject_reason,''), created_at, updated_at,
+       COALESCE(started_at,''), COALESCE(completed_at,'')
+FROM jobs WHERE id = ?`
+	var j Job
+	err := s.Reader.QueryRowContext(ctx, q, jobID).Scan(
+		&j.ID, &j.FixFlowIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+		&j.WorktreePath, &j.BranchName, &j.CommitSHA,
+		&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
+		&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
+		&j.StartedAt, &j.CompletedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Job{}, fmt.Errorf("job %s not found", jobID)
+		}
+		return Job{}, fmt.Errorf("get job %s: %w", jobID, err)
+	}
+	return j, nil
+}
+
+func (s *Store) ListJobs(ctx context.Context, project, state string) ([]Job, error) {
+	q := `
+SELECT id, fixflow_issue_id, project_name, state, iteration, max_iterations,
+       COALESCE(worktree_path,''), COALESCE(branch_name,''), COALESCE(commit_sha,''),
+       COALESCE(human_notes,''), COALESCE(error_message,''), COALESCE(mr_url,''),
+       COALESCE(reject_reason,''), created_at, updated_at,
+       COALESCE(started_at,''), COALESCE(completed_at,'')
+FROM jobs WHERE 1=1`
+	var args []any
+	if project != "" {
+		q += ` AND project_name = ?`
+		args = append(args, project)
+	}
+	if state != "" && state != "all" {
+		q += ` AND state = ?`
+		args = append(args, state)
+	}
+	q += ` ORDER BY updated_at DESC`
+
+	rows, err := s.Reader.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(
+			&j.ID, &j.FixFlowIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
+			&j.HumanNotes, &j.ErrorMessage, &j.MRURL,
+			&j.RejectReason, &j.CreatedAt, &j.UpdatedAt,
+			&j.StartedAt, &j.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// UpdateJobField updates a single field on a job.
+func (s *Store) UpdateJobField(ctx context.Context, jobID, field, value string) error {
+	allowed := map[string]bool{
+		"worktree_path": true, "branch_name": true, "commit_sha": true,
+		"human_notes": true, "error_message": true, "mr_url": true,
+		"reject_reason": true,
+	}
+	if !allowed[field] {
+		return fmt.Errorf("cannot update field %q", field)
+	}
+	q := fmt.Sprintf(`UPDATE jobs SET %s = ?, updated_at = strftime('%%Y-%%m-%%dT%%H:%%M:%%SZ', 'now') WHERE id = ?`, field)
+	_, err := s.Writer.ExecContext(ctx, q, value, jobID)
+	if err != nil {
+		return fmt.Errorf("update job %s.%s: %w", jobID, field, err)
+	}
+	return nil
+}
+
+// IncrementIteration bumps the iteration counter.
+func (s *Store) IncrementIteration(ctx context.Context, jobID string) error {
+	_, err := s.Writer.ExecContext(ctx,
+		`UPDATE jobs SET iteration = iteration + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`, jobID)
+	if err != nil {
+		return fmt.Errorf("increment iteration %s: %w", jobID, err)
+	}
+	return nil
+}
+
+// ResetJobForRetry resets a job to queued with fresh state.
+func (s *Store) ResetJobForRetry(ctx context.Context, jobID, notes string) error {
+	res, err := s.Writer.ExecContext(ctx, `
+UPDATE jobs SET state = 'queued', iteration = 0, worktree_path = NULL, branch_name = NULL,
+               commit_sha = NULL, error_message = NULL, human_notes = ?,
+               started_at = NULL, completed_at = NULL,
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ? AND state IN ('failed', 'rejected')`, notes, jobID)
+	if err != nil {
+		return fmt.Errorf("reset job %s: %w", jobID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %s cannot be retried from current state", jobID)
+	}
+	return nil
+}
+
+// HasActiveJobForIssue checks if there's already an active job for an issue.
+func (s *Store) HasActiveJobForIssue(ctx context.Context, fixflowIssueID string) (bool, error) {
+	const q = `SELECT COUNT(*) FROM jobs WHERE fixflow_issue_id = ? AND state NOT IN ('approved', 'rejected', 'failed')`
+	var count int
+	err := s.Reader.QueryRowContext(ctx, q, fixflowIssueID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check active job: %w", err)
+	}
+	return count > 0, nil
+}
+
+// LLM Session operations.
+
+type LLMSession struct {
+	ID           int
+	JobID        string
+	Step         string
+	Iteration    int
+	LLMProvider  string
+	PromptHash   string
+	ResponseText string
+	InputTokens  int
+	OutputTokens int
+	DurationMS   int
+	JSONLPath    string
+	CommitSHA    string
+	Status       string
+	ErrorMessage string
+	CreatedAt    string
+	CompletedAt  string
+}
+
+func (s *Store) CreateSession(ctx context.Context, jobID, step string, iteration int, provider string) (int64, error) {
+	const q = `INSERT INTO llm_sessions(job_id, step, iteration, llm_provider) VALUES(?,?,?,?)`
+	res, err := s.Writer.ExecContext(ctx, q, jobID, step, iteration, provider)
+	if err != nil {
+		return 0, fmt.Errorf("create session: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) CompleteSession(ctx context.Context, sessionID int64, status, responseText, promptHash, jsonlPath, commitSHA, errMsg string, inputTokens, outputTokens, durationMS int) error {
+	_, err := s.Writer.ExecContext(ctx, `
+UPDATE llm_sessions SET status = ?, response_text = ?, prompt_hash = ?, jsonl_path = ?,
+                       commit_sha = ?, error_message = ?, input_tokens = ?, output_tokens = ?,
+                       duration_ms = ?, completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ?`,
+		status, responseText, promptHash, jsonlPath, commitSHA, errMsg, inputTokens, outputTokens, durationMS, sessionID)
+	if err != nil {
+		return fmt.Errorf("complete session %d: %w", sessionID, err)
+	}
+	return nil
+}
+
+func (s *Store) ListSessionsByJob(ctx context.Context, jobID string) ([]LLMSession, error) {
+	const q = `
+SELECT id, job_id, step, iteration, llm_provider,
+       COALESCE(prompt_hash,''), COALESCE(response_text,''),
+       COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(duration_ms,0),
+       COALESCE(jsonl_path,''), COALESCE(commit_sha,''), status,
+       COALESCE(error_message,''), created_at, COALESCE(completed_at,'')
+FROM llm_sessions WHERE job_id = ? ORDER BY id ASC`
+	rows, err := s.Reader.QueryContext(ctx, q, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var out []LLMSession
+	for rows.Next() {
+		var sess LLMSession
+		if err := rows.Scan(
+			&sess.ID, &sess.JobID, &sess.Step, &sess.Iteration, &sess.LLMProvider,
+			&sess.PromptHash, &sess.ResponseText,
+			&sess.InputTokens, &sess.OutputTokens, &sess.DurationMS,
+			&sess.JSONLPath, &sess.CommitSHA, &sess.Status,
+			&sess.ErrorMessage, &sess.CreatedAt, &sess.CompletedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan session: %w", err)
+		}
+		out = append(out, sess)
+	}
+	return out, rows.Err()
+}
+
+// Artifact operations.
+
+type Artifact struct {
+	ID              int
+	JobID           string
+	FixFlowIssueID  string
+	Kind            string
+	Content         string
+	Iteration       int
+	CommitSHA       string
+	CreatedAt       string
+}
+
+func (s *Store) CreateArtifact(ctx context.Context, jobID, fixflowIssueID, kind, content string, iteration int, commitSHA string) (int64, error) {
+	const q = `INSERT INTO artifacts(job_id, fixflow_issue_id, kind, content, iteration, commit_sha) VALUES(?,?,?,?,?,?)`
+	res, err := s.Writer.ExecContext(ctx, q, jobID, fixflowIssueID, kind, content, iteration, commitSHA)
+	if err != nil {
+		return 0, fmt.Errorf("create artifact: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) GetLatestArtifact(ctx context.Context, jobID, kind string) (Artifact, error) {
+	const q = `
+SELECT id, job_id, fixflow_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
+FROM artifacts WHERE job_id = ? AND kind = ? ORDER BY id DESC LIMIT 1`
+	var a Artifact
+	err := s.Reader.QueryRowContext(ctx, q, jobID, kind).Scan(
+		&a.ID, &a.JobID, &a.FixFlowIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return Artifact{}, fmt.Errorf("no %s artifact for job %s", kind, jobID)
+		}
+		return Artifact{}, fmt.Errorf("get artifact: %w", err)
+	}
+	return a, nil
+}
+
+func (s *Store) ListArtifactsByJob(ctx context.Context, jobID string) ([]Artifact, error) {
+	const q = `
+SELECT id, job_id, fixflow_issue_id, kind, content, iteration, COALESCE(commit_sha,''), created_at
+FROM artifacts WHERE job_id = ? ORDER BY id ASC`
+	rows, err := s.Reader.QueryContext(ctx, q, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("list artifacts: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Artifact
+	for rows.Next() {
+		var a Artifact
+		if err := rows.Scan(&a.ID, &a.JobID, &a.FixFlowIssueID, &a.Kind, &a.Content, &a.Iteration, &a.CommitSHA, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan artifact: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// Helpers.
+
+func newJobID() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate job id: %w", err)
+	}
+	return "ff-job-" + strings.ToLower(hex.EncodeToString(buf)), nil
+}
