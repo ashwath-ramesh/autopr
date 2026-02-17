@@ -26,6 +26,7 @@ type Server struct {
 	jobCh     chan<- string
 	mux       *http.ServeMux
 	startedAt time.Time
+	healthLog sync.Once
 
 	// Simple rate limiter: per-IP request count per window.
 	mu         sync.Mutex
@@ -55,7 +56,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	jobQueueDepth, err := s.queuedJobDepth(r.Context())
 	if err != nil {
-		slog.Error("health: queued jobs count", "err", err)
+		s.healthLog.Do(func() {
+			slog.Error("health: queued jobs count", "err", err)
+		})
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
 		return
 	}
@@ -227,10 +230,10 @@ func containsAPMarker(desc string) bool {
 // GitLab webhook payload types.
 
 type gitlabIssueEvent struct {
-	ObjectKind       string               `json:"object_kind"`
-	ObjectAttributes gitlabIssueAttrs     `json:"object_attributes"`
-	Project          gitlabProject        `json:"project"`
-	LabelsRaw        []gitlabLabel        `json:"labels"`
+	ObjectKind       string           `json:"object_kind"`
+	ObjectAttributes gitlabIssueAttrs `json:"object_attributes"`
+	Project          gitlabProject    `json:"project"`
+	LabelsRaw        []gitlabLabel    `json:"labels"`
 }
 
 func (e gitlabIssueEvent) Labels() []string {
