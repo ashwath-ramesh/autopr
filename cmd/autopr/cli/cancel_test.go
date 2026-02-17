@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestCancelJobByIDHappyPath(t *testing.T) {
 		t.Fatalf("create session: %v", err)
 	}
 
-	warnings, err := cancelJobByID(ctx, store, jobID)
+	warnings, err := cancelJobByID(ctx, store, jobID, filepath.Join(tmp, "repos"))
 	if err != nil {
 		t.Fatalf("cancel job: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestCancelJobByIDTerminalStateError(t *testing.T) {
 		t.Fatalf("testing->ready: %v", err)
 	}
 
-	_, err = cancelJobByID(ctx, store, jobID)
+	_, err = cancelJobByID(ctx, store, jobID, filepath.Join(tmp, "repos"))
 	if err == nil {
 		t.Fatalf("expected terminal-state cancel error")
 	}
@@ -174,7 +175,7 @@ func TestCancelAllJobsCancelsOnlyEligibleStates(t *testing.T) {
 		t.Fatalf("ready prep testing->ready: %v", err)
 	}
 
-	cancelledIDs, warnings, err := cancelAllJobs(ctx, store)
+	cancelledIDs, warnings, err := cancelAllJobs(ctx, store, filepath.Join(tmp, "repos"))
 	if err != nil {
 		t.Fatalf("cancel all: %v", err)
 	}
@@ -201,5 +202,51 @@ func TestCancelAllJobsCancelsOnlyEligibleStates(t *testing.T) {
 	}
 	if readyJob.State != "ready" {
 		t.Fatalf("expected ready job to remain ready, got %q", readyJob.State)
+	}
+}
+
+func TestCancelJobByIDUsesFallbackWorktreePath(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+	reposRoot := filepath.Join(tmp, "repos")
+
+	store, err := db.Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	issueID, err := store.UpsertIssue(ctx, db.IssueUpsert{
+		ProjectName:   "myproject",
+		Source:        "github",
+		SourceIssueID: "713",
+		Title:         "cancel fallback path",
+		URL:           "https://github.com/org/repo/issues/713",
+		State:         "open",
+	})
+	if err != nil {
+		t.Fatalf("upsert issue: %v", err)
+	}
+	jobID, err := store.CreateJob(ctx, issueID, "myproject", 3)
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	fallbackPath := filepath.Join(reposRoot, "worktrees", jobID)
+	if err := os.MkdirAll(fallbackPath, 0o755); err != nil {
+		t.Fatalf("create fallback worktree: %v", err)
+	}
+
+	warnings, err := cancelJobByID(ctx, store, jobID, reposRoot)
+	if err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", warnings)
+	}
+
+	if _, err := os.Stat(fallbackPath); !os.IsNotExist(err) {
+		t.Fatalf("expected fallback worktree removed, stat err=%v", err)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -89,6 +90,7 @@ type Model struct {
 	confirmAction string // "approve", "reject", "retry", "cancel", or "" (none)
 	confirmJobID  string // explicit target for confirmation actions (used by list-view cancel)
 	actionErr     error  // non-fatal error from last action (shown inline)
+	actionWarn    string // non-fatal warning from last successful action
 
 	// Level 2d: diff view
 	showDiff   bool
@@ -131,6 +133,7 @@ type actionResultMsg struct {
 	action string
 	err    error
 	prURL  string
+	warn   string
 }
 type errMsg error
 
@@ -325,27 +328,36 @@ func (m Model) executeCancel() tea.Msg {
 	if err := m.store.CancelJob(ctx, jobID); err != nil {
 		return actionResultMsg{action: "cancel", err: err}
 	}
+
+	var warns []string
 	if err := m.store.MarkRunningSessionsCancelled(ctx, jobID); err != nil {
-		return actionResultMsg{action: "cancel", err: err}
+		warns = append(warns, fmt.Sprintf("%s: mark sessions cancelled: %v", db.ShortID(jobID), err))
 	}
 	if err := m.cleanupCancelledJobWorktree(ctx, job); err != nil {
-		return actionResultMsg{action: "cancel", err: err}
+		warns = append(warns, fmt.Sprintf("%s: cleanup worktree: %v", db.ShortID(jobID), err))
 	}
-	return actionResultMsg{action: "cancel"}
+	return actionResultMsg{action: "cancel", warn: strings.Join(warns, "; ")}
 }
 
 func (m Model) cleanupCancelledJobWorktree(ctx context.Context, job db.Job) error {
-	if job.WorktreePath == "" {
+	worktreePath := job.WorktreePath
+	if worktreePath == "" && m.cfg != nil && m.cfg.ReposRoot != "" {
+		worktreePath = filepath.Join(m.cfg.ReposRoot, "worktrees", job.ID)
+	}
+	if worktreePath == "" {
 		return nil
 	}
-	git.RemoveJobDir(job.WorktreePath)
-	if _, err := os.Stat(job.WorktreePath); !os.IsNotExist(err) {
+	git.RemoveJobDir(worktreePath)
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
 		if err == nil {
-			return fmt.Errorf("worktree path still exists: %s", job.WorktreePath)
+			return fmt.Errorf("worktree path still exists: %s", worktreePath)
 		}
 		return err
 	}
-	return m.store.ClearWorktreePath(ctx, job.ID)
+	if job.WorktreePath != "" {
+		return m.store.ClearWorktreePath(ctx, job.ID)
+	}
+	return nil
 }
 
 // buildTUIPRContent assembles PR title and body (mirrors pipeline.BuildPRContent).
@@ -423,9 +435,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			// Non-fatal: show error inline on the detail view.
 			m.actionErr = msg.err
+			m.actionWarn = ""
 		} else {
 			// Action succeeded — refresh job list and go back to Level 1.
 			m.actionErr = nil
+			m.actionWarn = msg.warn
 			m.selected = nil
 			m.sessions = nil
 			m.testArtifact = nil
@@ -535,6 +549,7 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 			m.confirmAction = "cancel"
 			m.confirmJobID = m.jobs[m.cursor].ID
 			m.actionErr = nil
+			m.actionWarn = ""
 		}
 	case "r":
 		return m, tea.Batch(m.fetchJobs, m.fetchIssueSummary)
@@ -619,24 +634,28 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 			m.confirmAction = "approve"
 			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
+			m.actionWarn = ""
 		}
 	case "x":
 		if m.selected != nil && m.selected.State == "ready" {
 			m.confirmAction = "reject"
 			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
+			m.actionWarn = ""
 		}
 	case "R":
 		if m.selected != nil && (m.selected.State == "failed" || m.selected.State == "rejected" || m.selected.State == "cancelled") {
 			m.confirmAction = "retry"
 			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
+			m.actionWarn = ""
 		}
 	case "c":
 		if m.selected != nil && db.IsCancellableState(m.selected.State) {
 			m.confirmAction = "cancel"
 			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
+			m.actionWarn = ""
 		}
 	case "esc":
 		m.selected = nil
@@ -646,6 +665,7 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 		m.confirmAction = ""
 		m.confirmJobID = ""
 		m.actionErr = nil
+		m.actionWarn = ""
 	case "r":
 		return m, tea.Batch(m.fetchJobs, m.fetchSessions, m.fetchIssueSummary)
 	}
@@ -875,6 +895,11 @@ func (m Model) listView() string {
 	))
 	b.WriteString(fmt.Sprintf("  Issues: %d synced, %d eligible, %d skipped\n",
 		m.issueSummary.Synced, m.issueSummary.Eligible, m.issueSummary.Skipped))
+	if m.actionWarn != "" {
+		b.WriteString("\n")
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render("Warning: " + m.actionWarn))
+		b.WriteString("\n")
+	}
 	b.WriteString("\n")
 	b.WriteString(dimStyle.Render(strings.Repeat("─", w)))
 	b.WriteString("\n")
@@ -1019,6 +1044,10 @@ func (m Model) detailView() string {
 	}
 	if m.actionErr != nil {
 		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("Action failed: %v", m.actionErr)))
+		b.WriteString("\n")
+	}
+	if m.actionWarn != "" {
+		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(fmt.Sprintf("Warning: %s", m.actionWarn)))
 		b.WriteString("\n")
 	}
 

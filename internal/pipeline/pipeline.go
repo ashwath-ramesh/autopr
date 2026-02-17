@@ -26,13 +26,19 @@ var errJobCancelled = errors.New("job cancelled")
 
 // Runner orchestrates the full pipeline for a job.
 type Runner struct {
-	store    *db.Store
-	provider llm.Provider
-	cfg      *config.Config
+	store       *db.Store
+	provider    llm.Provider
+	cfg         *config.Config
+	cloneForJob func(ctx context.Context, repoURL, token, destPath, branchName, baseBranch string) error
 }
 
 func New(store *db.Store, provider llm.Provider, cfg *config.Config) *Runner {
-	return &Runner{store: store, provider: provider, cfg: cfg}
+	return &Runner{
+		store:       store,
+		provider:    provider,
+		cfg:         cfg,
+		cloneForJob: git.CloneForJob,
+	}
 }
 
 // Run processes a job through the pipeline: plan -> implement <-> review -> tests -> ready.
@@ -67,14 +73,25 @@ func (r *Runner) Run(ctx context.Context, jobID string) error {
 	worktreePath := filepath.Join(r.cfg.ReposRoot, "worktrees", jobID)
 
 	if job.WorktreePath == "" {
-		if err := git.CloneForJob(runCtx, projectCfg.RepoURL, token, worktreePath, branchName, projectCfg.BaseBranch); err != nil {
+		if err := r.store.UpdateJobField(ctx, jobID, "worktree_path", worktreePath); err != nil {
+			if r.jobCancelled(jobID) {
+				return r.onJobCancelled(jobID)
+			}
+			return r.failJob(ctx, jobID, job.State, "set worktree path: "+err.Error())
+		}
+		if err := r.store.UpdateJobField(ctx, jobID, "branch_name", branchName); err != nil {
+			if r.jobCancelled(jobID) {
+				return r.onJobCancelled(jobID)
+			}
+			return r.failJob(ctx, jobID, job.State, "set branch name: "+err.Error())
+		}
+
+		if err := r.cloneForJob(runCtx, projectCfg.RepoURL, token, worktreePath, branchName, projectCfg.BaseBranch); err != nil {
 			if r.isJobCancelledError(runCtx, jobID, err) {
 				return r.onJobCancelled(jobID)
 			}
 			return r.failJob(ctx, jobID, job.State, "clone for job: "+err.Error())
 		}
-		_ = r.store.UpdateJobField(ctx, jobID, "worktree_path", worktreePath)
-		_ = r.store.UpdateJobField(ctx, jobID, "branch_name", branchName)
 	} else {
 		worktreePath = job.WorktreePath
 		branchName = job.BranchName

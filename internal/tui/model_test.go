@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -114,6 +115,63 @@ func TestCancelConfirmYesCancelsJob(t *testing.T) {
 	}
 	if job.State != "cancelled" {
 		t.Fatalf("expected cancelled, got %q", job.State)
+	}
+}
+
+func TestCancelWithCleanupWarningStillSucceeds(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	m, store, jobID := newTestModelWithQueuedJob(t, tmp)
+	defer store.Close()
+
+	blockingFile := filepath.Join(tmp, "blocking-file")
+	if err := os.WriteFile(blockingFile, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write blocking file: %v", err)
+	}
+	badPath := filepath.Join(blockingFile, "child")
+	if err := store.UpdateJobField(ctx, jobID, "worktree_path", badPath); err != nil {
+		t.Fatalf("set invalid worktree path: %v", err)
+	}
+	jobs, err := store.ListJobs(ctx, "", "all")
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	m.jobs = jobs
+
+	modelAny, _ := m.handleKey(keyRunes('c'))
+	m = modelAny.(Model)
+	modelAny, cmd := m.handleKey(keyRunes('y'))
+	m = modelAny.(Model)
+	if cmd == nil {
+		t.Fatalf("expected execute cancel command")
+	}
+
+	msg := cmd()
+	modelAny, refreshCmd := m.Update(msg)
+	m = modelAny.(Model)
+	if refreshCmd != nil {
+		msg = refreshCmd()
+		modelAny, _ = m.Update(msg)
+		m = modelAny.(Model)
+	}
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.State != "cancelled" {
+		t.Fatalf("expected cancelled, got %q", job.State)
+	}
+	if m.actionErr != nil {
+		t.Fatalf("expected non-fatal warning only, got error: %v", m.actionErr)
+	}
+	if m.actionWarn == "" {
+		t.Fatalf("expected warning after cleanup failure")
+	}
+	if !strings.Contains(m.listView(), "Warning: ") {
+		t.Fatalf("expected warning in list view")
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -46,7 +47,7 @@ func runCancel(cmd *cobra.Command, args []string) error {
 	defer store.Close()
 
 	if cancelAll {
-		ids, warnings, err := cancelAllJobs(cmd.Context(), store)
+		ids, warnings, err := cancelAllJobs(cmd.Context(), store, cfg.ReposRoot)
 		if err != nil {
 			return err
 		}
@@ -79,7 +80,7 @@ func runCancel(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	warnings, err := cancelJobByID(cmd.Context(), store, jobID)
+	warnings, err := cancelJobByID(cmd.Context(), store, jobID, cfg.ReposRoot)
 	if err != nil {
 		return err
 	}
@@ -100,7 +101,7 @@ func runCancel(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func cancelJobByID(ctx context.Context, store *db.Store, jobID string) ([]string, error) {
+func cancelJobByID(ctx context.Context, store *db.Store, jobID, reposRoot string) ([]string, error) {
 	job, err := store.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, err
@@ -119,13 +120,13 @@ func cancelJobByID(ctx context.Context, store *db.Store, jobID string) ([]string
 	if err := store.MarkRunningSessionsCancelled(ctx, jobID); err != nil {
 		warnings = append(warnings, fmt.Sprintf("%s: mark sessions cancelled: %v", db.ShortID(jobID), err))
 	}
-	if err := cleanupCancelledWorktree(ctx, store, job); err != nil {
+	if err := cleanupCancelledWorktree(ctx, store, job, reposRoot); err != nil {
 		warnings = append(warnings, fmt.Sprintf("%s: cleanup worktree: %v", db.ShortID(jobID), err))
 	}
 	return warnings, nil
 }
 
-func cancelAllJobs(ctx context.Context, store *db.Store) ([]string, []string, error) {
+func cancelAllJobs(ctx context.Context, store *db.Store, reposRoot string) ([]string, []string, error) {
 	ids, err := store.CancelAllCancellableJobs(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -141,28 +142,34 @@ func cancelAllJobs(ctx context.Context, store *db.Store) ([]string, []string, er
 			warnings = append(warnings, fmt.Sprintf("%s: load job for cleanup: %v", db.ShortID(id), err))
 			continue
 		}
-		if err := cleanupCancelledWorktree(ctx, store, job); err != nil {
+		if err := cleanupCancelledWorktree(ctx, store, job, reposRoot); err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: cleanup worktree: %v", db.ShortID(id), err))
 		}
 	}
 	return ids, warnings, nil
 }
 
-func cleanupCancelledWorktree(ctx context.Context, store *db.Store, job db.Job) error {
-	if job.WorktreePath == "" {
+func cleanupCancelledWorktree(ctx context.Context, store *db.Store, job db.Job, reposRoot string) error {
+	worktreePath := job.WorktreePath
+	if worktreePath == "" && reposRoot != "" {
+		worktreePath = filepath.Join(reposRoot, "worktrees", job.ID)
+	}
+	if worktreePath == "" {
 		return nil
 	}
 
-	git.RemoveJobDir(job.WorktreePath)
-	if _, err := os.Stat(job.WorktreePath); !os.IsNotExist(err) {
+	git.RemoveJobDir(worktreePath)
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
 		if err == nil {
-			return fmt.Errorf("worktree path still exists: %s", job.WorktreePath)
+			return fmt.Errorf("worktree path still exists: %s", worktreePath)
 		}
 		return err
 	}
 
-	if err := store.ClearWorktreePath(ctx, job.ID); err != nil {
-		return err
+	if job.WorktreePath != "" {
+		if err := store.ClearWorktreePath(ctx, job.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
