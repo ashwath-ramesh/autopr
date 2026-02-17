@@ -44,11 +44,13 @@ var (
 		"pr closed":    lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
 		"rejected":     lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
 		"failed":       lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		"cancelled":    lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 	}
 	sessStatusStyle = map[string]lipgloss.Style{
 		"running":   lipgloss.NewStyle().Foreground(lipgloss.Color("33")),
 		"completed": lipgloss.NewStyle().Foreground(lipgloss.Color("46")),
 		"failed":    lipgloss.NewStyle().Foreground(lipgloss.Color("196")),
+		"cancelled": lipgloss.NewStyle().Foreground(lipgloss.Color("244")),
 	}
 	diffAddStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("46"))
 	diffDelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
@@ -84,7 +86,8 @@ type Model struct {
 	sessCursor   int
 
 	// Level 2: confirmation prompt and action feedback
-	confirmAction string // "approve", "reject", "retry", or "" (none)
+	confirmAction string // "approve", "reject", "retry", "cancel", or "" (none)
+	confirmJobID  string // explicit target for confirmation actions (used by list-view cancel)
 	actionErr     error  // non-fatal error from last action (shown inline)
 
 	// Level 2d: diff view
@@ -305,6 +308,46 @@ func (m Model) executeRetry() tea.Msg {
 	return actionResultMsg{action: "retry"}
 }
 
+func (m Model) executeCancel() tea.Msg {
+	ctx := context.Background()
+	jobID := m.confirmTargetJobID()
+	if jobID == "" {
+		return actionResultMsg{action: "cancel", err: fmt.Errorf("no job selected")}
+	}
+
+	job, err := m.store.GetJob(ctx, jobID)
+	if err != nil {
+		return actionResultMsg{action: "cancel", err: err}
+	}
+	if !db.IsCancellableState(job.State) {
+		return actionResultMsg{action: "cancel", err: fmt.Errorf("job %s is in state %q and cannot be cancelled", db.ShortID(jobID), job.State)}
+	}
+	if err := m.store.CancelJob(ctx, jobID); err != nil {
+		return actionResultMsg{action: "cancel", err: err}
+	}
+	if err := m.store.MarkRunningSessionsCancelled(ctx, jobID); err != nil {
+		return actionResultMsg{action: "cancel", err: err}
+	}
+	if err := m.cleanupCancelledJobWorktree(ctx, job); err != nil {
+		return actionResultMsg{action: "cancel", err: err}
+	}
+	return actionResultMsg{action: "cancel"}
+}
+
+func (m Model) cleanupCancelledJobWorktree(ctx context.Context, job db.Job) error {
+	if job.WorktreePath == "" {
+		return nil
+	}
+	git.RemoveJobDir(job.WorktreePath)
+	if _, err := os.Stat(job.WorktreePath); !os.IsNotExist(err) {
+		if err == nil {
+			return fmt.Errorf("worktree path still exists: %s", job.WorktreePath)
+		}
+		return err
+	}
+	return m.store.ClearWorktreePath(ctx, job.ID)
+}
+
 // buildTUIPRContent assembles PR title and body (mirrors pipeline.BuildPRContent).
 func buildTUIPRContent(job *db.Job, issue db.Issue) (string, string) {
 	title := fmt.Sprintf("[AutoPR] %s", issue.Title)
@@ -376,6 +419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.diffOffset = 0
 	case actionResultMsg:
 		m.confirmAction = ""
+		m.confirmJobID = ""
 		if msg.err != nil {
 			// Non-fatal: show error inline on the detail view.
 			m.actionErr = msg.err
@@ -449,9 +493,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.executeReject
 			case "retry":
 				return m, m.executeRetry
+			case "cancel":
+				return m, m.executeCancel
 			}
 		case "n", "esc":
 			m.confirmAction = ""
+			m.confirmJobID = ""
 		}
 		return m, nil
 	}
@@ -482,6 +529,12 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.jobs) {
 			m.selected = &m.jobs[m.cursor]
 			return m, m.fetchSessions
+		}
+	case "c":
+		if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
+			m.confirmAction = "cancel"
+			m.confirmJobID = m.jobs[m.cursor].ID
+			m.actionErr = nil
 		}
 	case "r":
 		return m, tea.Batch(m.fetchJobs, m.fetchIssueSummary)
@@ -564,16 +617,25 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 	case "a":
 		if m.selected != nil && m.selected.State == "ready" {
 			m.confirmAction = "approve"
+			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
 		}
 	case "x":
 		if m.selected != nil && m.selected.State == "ready" {
 			m.confirmAction = "reject"
+			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
 		}
 	case "R":
-		if m.selected != nil && (m.selected.State == "failed" || m.selected.State == "rejected") {
+		if m.selected != nil && (m.selected.State == "failed" || m.selected.State == "rejected" || m.selected.State == "cancelled") {
 			m.confirmAction = "retry"
+			m.confirmJobID = m.selected.ID
+			m.actionErr = nil
+		}
+	case "c":
+		if m.selected != nil && db.IsCancellableState(m.selected.State) {
+			m.confirmAction = "cancel"
+			m.confirmJobID = m.selected.ID
 			m.actionErr = nil
 		}
 	case "esc":
@@ -582,6 +644,7 @@ func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
 		m.testArtifact = nil
 		m.sessCursor = 0
 		m.confirmAction = ""
+		m.confirmJobID = ""
 		m.actionErr = nil
 	case "r":
 		return m, tea.Batch(m.fetchJobs, m.fetchSessions, m.fetchIssueSummary)
@@ -668,6 +731,8 @@ func (m Model) testStatus() string {
 	switch m.selected.State {
 	case "ready", "approved", "rejected":
 		return "completed"
+	case "cancelled":
+		return "cancelled"
 	case "testing":
 		return "running"
 	default:
@@ -806,7 +871,7 @@ func (m Model) listView() string {
 		labelStyle.Render("active"), active,
 		stateStyle["ready"].Render("ready"), counts["ready"],
 		stateStyle["failed"].Render("failed"), counts["failed"],
-		labelStyle.Render("done"), counts["approved"]+counts["rejected"],
+		stateStyle["cancelled"].Render("cancelled"), counts["cancelled"],
 	))
 	b.WriteString(fmt.Sprintf("  Issues: %d synced, %d eligible, %d skipped\n",
 		m.issueSummary.Synced, m.issueSummary.Eligible, m.issueSummary.Skipped))
@@ -885,7 +950,16 @@ func (m Model) listView() string {
 
 	b.WriteString(dimStyle.Render(strings.Repeat("─", w)))
 	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("j/k navigate  enter details  r refresh  q quit"))
+	if m.confirmAction != "" {
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render(m.confirmPrompt()))
+		return b.String()
+	}
+	hints := []string{"j/k navigate", "enter details"}
+	if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
+		hints = append(hints, "c cancel")
+	}
+	hints = append(hints, "r refresh", "q quit")
+	b.WriteString(dimStyle.Render(strings.Join(hints, "  ")))
 	return b.String()
 }
 
@@ -1144,14 +1218,10 @@ func (m Model) detailView() string {
 
 	// Confirmation prompt overrides normal hint bar.
 	if m.confirmAction != "" {
-		label := map[string]string{
-			"approve": "Approve job " + db.ShortID(job.ID) + " and create PR?",
-			"reject":  "Reject job " + db.ShortID(job.ID) + "?",
-			"retry":   "Retry job " + db.ShortID(job.ID) + "?",
+		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render(m.confirmPrompt()))
+		if m.confirmAction != "cancel" {
+			b.WriteString(dimStyle.Render("  y confirm  n cancel"))
 		}
-		prompt := label[m.confirmAction]
-		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render(prompt))
-		b.WriteString(dimStyle.Render("  y confirm  n cancel"))
 		return b.String()
 	}
 
@@ -1169,8 +1239,11 @@ func (m Model) detailView() string {
 	if job.State == "ready" {
 		hintParts = append(hintParts, "a approve", "x reject")
 	}
-	if job.State == "failed" || job.State == "rejected" {
+	if job.State == "failed" || job.State == "rejected" || job.State == "cancelled" {
 		hintParts = append(hintParts, "R retry")
+	}
+	if db.IsCancellableState(job.State) {
+		hintParts = append(hintParts, "c cancel")
 	}
 	hintParts = append(hintParts, "esc back", "r refresh", "q quit")
 	hints := strings.Join(hintParts, "  ")
@@ -1339,6 +1412,36 @@ func (m Model) scrollHeight() int {
 		h = 1
 	}
 	return h
+}
+
+func (m Model) confirmTargetJobID() string {
+	if m.confirmJobID != "" {
+		return m.confirmJobID
+	}
+	if m.selected != nil {
+		return m.selected.ID
+	}
+	if m.cursor < len(m.jobs) {
+		return m.jobs[m.cursor].ID
+	}
+	return ""
+}
+
+func (m Model) confirmPrompt() string {
+	jobID := m.confirmTargetJobID()
+	short := db.ShortID(jobID)
+	switch m.confirmAction {
+	case "approve":
+		return "Approve job " + short + " and create PR?"
+	case "reject":
+		return "Reject job " + short + "?"
+	case "retry":
+		return "Retry job " + short + "?"
+	case "cancel":
+		return "Cancel job " + short + "? (y/n)"
+	default:
+		return ""
+	}
 }
 
 func (m Model) jobCounts() map[string]int {
