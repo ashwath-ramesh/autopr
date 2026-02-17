@@ -38,7 +38,11 @@ for human approval.
 - Git
 - SQLite (via `modernc.org/sqlite`, no CGO required)
 
-### LLM Provider (pick one)
+### LLM CLI Tool (pick one)
+
+AutoPR does not call LLM APIs directly. It shells out to a CLI tool in
+non-interactive mode (`claude --print` / `codex exec --full-auto`) and parses
+the streaming JSON output. You need the CLI installed and authenticated.
 
 **OpenAI Codex CLI:**
 
@@ -46,19 +50,21 @@ for human approval.
 npm install -g @openai/codex
 ```
 
-Requires an OpenAI API key with access to Codex models. Set `OPENAI_API_KEY` in your environment.
-An OpenAI Plus or Pro subscription, or API credits, is needed.
+The Codex CLI must be able to authenticate — set `OPENAI_API_KEY` in your
+environment, or log in via the CLI. An OpenAI Plus/Pro subscription or API
+credits is needed.
 
-**Anthropic Claude CLI:**
+**Anthropic Claude Code CLI:**
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 ```
 
-Requires an Anthropic API key. Set `ANTHROPIC_API_KEY` in your environment.
-A Claude Max subscription or API credits is needed.
+The Claude Code CLI must be able to authenticate — set `ANTHROPIC_API_KEY` in
+your environment, or log in via the CLI. A Claude Max subscription or API
+credits is needed.
 
-Configure which provider to use in `autopr.toml`:
+Configure which CLI to use in `autopr.toml`:
 
 ```toml
 [llm]
