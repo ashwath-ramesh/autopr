@@ -161,14 +161,24 @@ func (m *Manager) RefreshCache(ctx context.Context) (VersionCheckCache, error) {
 	if err != nil {
 		return VersionCheckCache{}, err
 	}
-	entry := VersionCheckCache{
-		CheckedAt: m.Now(),
-		LatestTag: release.TagName,
-	}
+	entry := VersionCheckCache{CheckedAt: m.Now(), LatestTag: release.TagName}
 	if err := m.WriteCache(entry); err != nil {
 		return VersionCheckCache{}, err
 	}
 	return entry, nil
+}
+
+// MarkCheckAttempt records that a version check was attempted, even if the
+// network call failed. This throttles future checks by the regular cache TTL.
+func (m *Manager) MarkCheckAttempt(latestTag string) error {
+	latestTag = canonicalVersion(latestTag)
+	if latestTag == "" {
+		latestTag = "unknown"
+	}
+	return m.WriteCache(VersionCheckCache{
+		CheckedAt: m.Now(),
+		LatestTag: latestTag,
+	})
 }
 
 func (m *Manager) ReadCache() (VersionCheckCache, error) {

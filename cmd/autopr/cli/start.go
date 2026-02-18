@@ -18,6 +18,8 @@ import (
 
 var foreground bool
 
+const skipUpdateNoticeEnv = "AUTOPR_SKIP_UPDATE_NOTICE"
+
 var startCmd = &cobra.Command{
 	Use:   "start",
 	Short: "Start the autopr daemon",
@@ -30,7 +32,9 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	maybePrintUpgradeNotice(version, os.Stdout, update.NewManager(version))
+	if shouldCheckForUpdates() {
+		maybePrintUpgradeNotice(version, os.Stdout, update.NewManager(version))
+	}
 
 	cfg, err := loadConfig()
 	if err != nil {
@@ -99,6 +103,7 @@ func runBackground(cfg *config.Config) error {
 	child.Stdout = logFile
 	child.Stderr = logFile
 	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	child.Env = childEnvWithSkippedUpdateNotice()
 
 	if err := child.Start(); err != nil {
 		return fmt.Errorf("start daemon: %w", err)
@@ -122,4 +127,12 @@ func runBackground(cfg *config.Config) error {
 
 	fmt.Printf("Daemon started (pid %d), log: %s\n", child.Process.Pid, logPath)
 	return nil
+}
+
+func shouldCheckForUpdates() bool {
+	return os.Getenv(skipUpdateNoticeEnv) != "1"
+}
+
+func childEnvWithSkippedUpdateNotice() []string {
+	return append(os.Environ(), skipUpdateNoticeEnv+"=1")
 }

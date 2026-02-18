@@ -187,6 +187,32 @@ func TestCacheReadWriteAndFreshness(t *testing.T) {
 	}
 }
 
+func TestMarkCheckAttemptWritesCanonicalTag(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	mgr := &Manager{
+		Now:       func() time.Time { return now },
+		StatePath: filepath.Join(tmp, "version-check.json"),
+	}
+
+	if err := mgr.MarkCheckAttempt("0.4.1"); err != nil {
+		t.Fatalf("mark check attempt: %v", err)
+	}
+
+	got, err := mgr.ReadCache()
+	if err != nil {
+		t.Fatalf("read cache: %v", err)
+	}
+	if got.LatestTag != "v0.4.1" {
+		t.Fatalf("expected canonical latest tag v0.4.1, got %q", got.LatestTag)
+	}
+	if !got.CheckedAt.Equal(now) {
+		t.Fatalf("expected checked_at %v, got %v", now, got.CheckedAt)
+	}
+}
+
 func TestUpgradeDownloadsAndReplacesBinary(t *testing.T) {
 	t.Parallel()
 
