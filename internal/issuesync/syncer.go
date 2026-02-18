@@ -168,7 +168,14 @@ func (s *Syncer) checkPRStatus(ctx context.Context) {
 			if s.cfg.Tokens.GitLab == "" || branchName == "" {
 				continue
 			}
-			prURL, lookupErr = s.findGitLabMRByBranch(ctx, s.cfg.Tokens.GitLab, proj.GitLab.BaseURL, proj.GitLab.ProjectID, branchName, "all")
+			prURL, lookupErr = s.findGitLabMRByBranch(
+				ctx,
+				s.cfg.Tokens.GitLab,
+				normalizeGitLabBaseURL(proj.GitLab.BaseURL),
+				proj.GitLab.ProjectID,
+				branchName,
+				"all",
+			)
 		default:
 			continue
 		}
@@ -210,7 +217,12 @@ func (s *Syncer) checkAndApplyPRStatus(ctx context.Context, job db.Job, proj *co
 		if s.cfg.Tokens.GitLab == "" {
 			return
 		}
-		status, checkErr = s.checkGitLabMRStatus(ctx, s.cfg.Tokens.GitLab, proj.GitLab.BaseURL, job.PRURL)
+		status, checkErr = s.checkGitLabMRStatus(
+			ctx,
+			s.cfg.Tokens.GitLab,
+			normalizeGitLabBaseURL(proj.GitLab.BaseURL),
+			job.PRURL,
+		)
 	default:
 		return
 	}
@@ -259,4 +271,12 @@ func (s *Syncer) cleanupWorktree(ctx context.Context, job db.Job) {
 		return
 	}
 	slog.Info("worktree cleaned up", "job", db.ShortID(job.ID), "path", job.WorktreePath)
+}
+
+func normalizeGitLabBaseURL(baseURL string) string {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "https://gitlab.com"
+	}
+	return strings.TrimRight(baseURL, "/")
 }

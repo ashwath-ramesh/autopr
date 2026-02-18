@@ -153,6 +153,111 @@ func TestCheckPRStatus_BranchFallbackNoRemotePRLeavesJobUnchanged(t *testing.T) 
 	}
 }
 
+func TestCheckPRStatus_GitLabBranchFallbackMergedDefaultsBaseURL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	jobID := createSyncTestJob(t, ctx, store, "project-gl", "gitlab-fallback-merged", "ready", "autopr/gl-merged", "")
+
+	cfg := &config.Config{
+		Tokens: config.TokensConfig{GitLab: "token"},
+		Projects: []config.ProjectConfig{
+			{
+				Name:   "project-gl",
+				GitLab: &config.ProjectGitLab{ProjectID: "group%2Frepo"},
+			},
+		},
+	}
+	s := NewSyncer(cfg, store, make(chan string, 1))
+	s.findGitLabMRByBranch = func(ctx context.Context, token, baseURL, projectID, sourceBranch, state string) (string, error) {
+		if baseURL != "https://gitlab.com" {
+			t.Fatalf("expected default gitlab base URL, got %q", baseURL)
+		}
+		if state != "all" {
+			t.Fatalf("expected state=all, got %q", state)
+		}
+		if sourceBranch != "autopr/gl-merged" {
+			t.Fatalf("unexpected branch lookup: %q", sourceBranch)
+		}
+		return "https://gitlab.com/group/repo/-/merge_requests/46", nil
+	}
+	s.checkGitLabMRStatus = func(ctx context.Context, token, baseURL, mrURL string) (git.PRMergeStatus, error) {
+		if baseURL != "https://gitlab.com" {
+			t.Fatalf("expected default gitlab base URL for status check, got %q", baseURL)
+		}
+		if mrURL != "https://gitlab.com/group/repo/-/merge_requests/46" {
+			t.Fatalf("unexpected MR URL: %q", mrURL)
+		}
+		return git.PRMergeStatus{Merged: true, MergedAt: "2026-02-18T06:07:08Z"}, nil
+	}
+
+	s.checkPRStatus(ctx)
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.PRURL != "https://gitlab.com/group/repo/-/merge_requests/46" {
+		t.Fatalf("expected discovered MR URL, got %q", job.PRURL)
+	}
+	if job.PRMergedAt != "2026-02-18T06:07:08Z" {
+		t.Fatalf("expected merged timestamp, got %q", job.PRMergedAt)
+	}
+	if job.State != "approved" {
+		t.Fatalf("expected job state approved after normalization, got %q", job.State)
+	}
+}
+
+func TestCheckPRStatus_GitLabBranchFallbackOpenMRTransitionsApproved(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	jobID := createSyncTestJob(t, ctx, store, "project-gl", "gitlab-fallback-open", "ready", "autopr/gl-open", "")
+
+	cfg := &config.Config{
+		Tokens: config.TokensConfig{GitLab: "token"},
+		Projects: []config.ProjectConfig{
+			{
+				Name:   "project-gl",
+				GitLab: &config.ProjectGitLab{ProjectID: "group%2Frepo"},
+			},
+		},
+	}
+	s := NewSyncer(cfg, store, make(chan string, 1))
+	s.findGitLabMRByBranch = func(ctx context.Context, token, baseURL, projectID, sourceBranch, state string) (string, error) {
+		if baseURL != "https://gitlab.com" {
+			t.Fatalf("expected default gitlab base URL, got %q", baseURL)
+		}
+		return "https://gitlab.com/group/repo/-/merge_requests/47", nil
+	}
+	s.checkGitLabMRStatus = func(ctx context.Context, token, baseURL, mrURL string) (git.PRMergeStatus, error) {
+		if baseURL != "https://gitlab.com" {
+			t.Fatalf("expected default gitlab base URL for status check, got %q", baseURL)
+		}
+		return git.PRMergeStatus{}, nil
+	}
+
+	s.checkPRStatus(ctx)
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.State != "approved" {
+		t.Fatalf("expected ready job to become approved, got %q", job.State)
+	}
+	if job.PRURL != "https://gitlab.com/group/repo/-/merge_requests/47" {
+		t.Fatalf("expected discovered MR URL, got %q", job.PRURL)
+	}
+	if job.PRMergedAt != "" || job.PRClosedAt != "" {
+		t.Fatalf("expected no terminal PR timestamps, got merged=%q closed=%q", job.PRMergedAt, job.PRClosedAt)
+	}
+}
+
 func TestCheckPRStatus_ApprovedKnownPRStillPolled(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

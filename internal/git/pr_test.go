@@ -132,3 +132,28 @@ func TestFindGitLabMRByBranch_StateAll(t *testing.T) {
 		t.Fatalf("want MR URL, got %q", got)
 	}
 }
+
+func TestNormalizeGitLabBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty", in: "", want: "https://gitlab.com"},
+		{name: "whitespace", in: "   ", want: "https://gitlab.com"},
+		{name: "trim trailing slash", in: "https://self-hosted.example/", want: "https://self-hosted.example"},
+		{name: "keep existing", in: "https://gitlab.example", want: "https://gitlab.example"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := normalizeGitLabBaseURL(tc.in); got != tc.want {
+				t.Fatalf("normalizeGitLabBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
