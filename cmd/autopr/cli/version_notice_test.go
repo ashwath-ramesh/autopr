@@ -21,6 +21,13 @@ type mockStartVersionChecker struct {
 	markAttemptFn  func(string) error
 }
 
+func setNoticeRefreshSync(t *testing.T) {
+	t.Helper()
+	prev := runStartUpdateRefresh
+	runStartUpdateRefresh = func(fn func()) { fn() }
+	t.Cleanup(func() { runStartUpdateRefresh = prev })
+}
+
 func (m mockStartVersionChecker) ReadCache() (update.VersionCheckCache, error) {
 	if m.readCacheFn == nil {
 		return update.VersionCheckCache{}, os.ErrNotExist
@@ -50,6 +57,8 @@ func (m mockStartVersionChecker) MarkCheckAttempt(latestTag string) error {
 }
 
 func TestMaybePrintUpgradeNoticeShowsCachedUpdate(t *testing.T) {
+	setNoticeRefreshSync(t)
+
 	var out bytes.Buffer
 	checker := mockStartVersionChecker{
 		readCacheFn: func() (update.VersionCheckCache, error) {
@@ -70,6 +79,8 @@ func TestMaybePrintUpgradeNoticeShowsCachedUpdate(t *testing.T) {
 }
 
 func TestMaybePrintUpgradeNoticeStaleCachePrintsRefreshedUpdate(t *testing.T) {
+	setNoticeRefreshSync(t)
+
 	prevTimeout := startUpdateRefreshTimeout
 	startUpdateRefreshTimeout = 250 * time.Millisecond
 	defer func() { startUpdateRefreshTimeout = prevTimeout }()
@@ -101,6 +112,8 @@ func TestMaybePrintUpgradeNoticeStaleCachePrintsRefreshedUpdate(t *testing.T) {
 }
 
 func TestMaybePrintUpgradeNoticeRefreshFailureMarksAttemptAndIsSilent(t *testing.T) {
+	setNoticeRefreshSync(t)
+
 	prevTimeout := startUpdateRefreshTimeout
 	startUpdateRefreshTimeout = 250 * time.Millisecond
 	defer func() { startUpdateRefreshTimeout = prevTimeout }()
@@ -135,6 +148,8 @@ func TestMaybePrintUpgradeNoticeRefreshFailureMarksAttemptAndIsSilent(t *testing
 }
 
 func TestMaybePrintUpgradeNoticeFreshCacheSkipsRefresh(t *testing.T) {
+	setNoticeRefreshSync(t)
+
 	var refreshCalls atomic.Int32
 	checker := mockStartVersionChecker{
 		readCacheFn: func() (update.VersionCheckCache, error) {
@@ -154,6 +169,8 @@ func TestMaybePrintUpgradeNoticeFreshCacheSkipsRefresh(t *testing.T) {
 }
 
 func TestMaybePrintUpgradeNoticeFailedRefreshThrottlesForTTL(t *testing.T) {
+	setNoticeRefreshSync(t)
+
 	prevTimeout := startUpdateRefreshTimeout
 	startUpdateRefreshTimeout = 250 * time.Millisecond
 	defer func() { startUpdateRefreshTimeout = prevTimeout }()
@@ -202,12 +219,12 @@ func TestMaybePrintUpgradeNoticeFailedRefreshThrottlesForTTL(t *testing.T) {
 	}
 }
 
-func TestMaybePrintUpgradeNoticeRefreshTimeoutIsBounded(t *testing.T) {
+func TestMaybePrintUpgradeNoticeRefreshRunsAsync(t *testing.T) {
 	prevTimeout := startUpdateRefreshTimeout
-	startUpdateRefreshTimeout = 60 * time.Millisecond
+	startUpdateRefreshTimeout = 120 * time.Millisecond
 	defer func() { startUpdateRefreshTimeout = prevTimeout }()
 
-	var marked atomic.Bool
+	markCalled := make(chan struct{}, 1)
 	checker := mockStartVersionChecker{
 		readCacheFn: func() (update.VersionCheckCache, error) {
 			return update.VersionCheckCache{}, os.ErrNotExist
@@ -217,7 +234,7 @@ func TestMaybePrintUpgradeNoticeRefreshTimeoutIsBounded(t *testing.T) {
 			return update.VersionCheckCache{}, ctx.Err()
 		},
 		markAttemptFn: func(string) error {
-			marked.Store(true)
+			markCalled <- struct{}{}
 			return nil
 		},
 	}
@@ -225,10 +242,13 @@ func TestMaybePrintUpgradeNoticeRefreshTimeoutIsBounded(t *testing.T) {
 	started := time.Now()
 	maybePrintUpgradeNotice("v0.2.0", &bytes.Buffer{}, checker)
 	elapsed := time.Since(started)
-	if elapsed > 200*time.Millisecond {
-		t.Fatalf("expected bounded refresh time, took %v", elapsed)
+	if elapsed > 50*time.Millisecond {
+		t.Fatalf("expected immediate return, took %v", elapsed)
 	}
-	if !marked.Load() {
-		t.Fatal("expected timeout refresh to mark check attempt")
+
+	select {
+	case <-markCalled:
+	case <-time.After(1 * time.Second):
+		t.Fatal("expected async refresh path to mark check attempt")
 	}
 }

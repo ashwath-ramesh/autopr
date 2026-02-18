@@ -10,6 +10,7 @@ import (
 )
 
 var startUpdateRefreshTimeout = 400 * time.Millisecond
+var runStartUpdateRefresh = func(fn func()) { go fn() }
 
 type startVersionChecker interface {
 	ReadCache() (update.VersionCheckCache, error)
@@ -32,16 +33,18 @@ func maybePrintUpgradeNotice(currentVersion string, out io.Writer, checker start
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), startUpdateRefreshTimeout)
-	defer cancel()
-	refreshed, err := checker.RefreshCache(ctx)
-	if err != nil {
-		_ = checker.MarkCheckAttempt(fallbackTag)
-		return
-	}
-	if !printed {
-		_ = printUpgradeNotice(currentVersion, refreshed.LatestTag, out)
-	}
+	runStartUpdateRefresh(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), startUpdateRefreshTimeout)
+		defer cancel()
+		refreshed, err := checker.RefreshCache(ctx)
+		if err != nil {
+			_ = checker.MarkCheckAttempt(fallbackTag)
+			return
+		}
+		if !printed {
+			_ = printUpgradeNotice(currentVersion, refreshed.LatestTag, out)
+		}
+	})
 }
 
 func printUpgradeNotice(currentVersion, latestTag string, out io.Writer) bool {

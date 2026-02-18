@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -32,24 +33,49 @@ func init() {
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	if shouldCheckForUpdates() {
-		maybePrintUpgradeNotice(version, os.Stdout, update.NewManager(version))
-	}
+	return runStartWith(
+		loadConfig,
+		daemon.IsRunning,
+		maybePrintUpgradeNotice,
+		func(currentVersion string) startVersionChecker {
+			return update.NewManager(currentVersion)
+		},
+		runForeground,
+		runBackground,
+	)
+}
 
-	cfg, err := loadConfig()
+type noticePrinterFunc func(string, io.Writer, startVersionChecker)
+type checkerFactoryFunc func(string) startVersionChecker
+type daemonRunningFunc func(string) bool
+type startRunnerFunc func(*config.Config) error
+
+func runStartWith(
+	loadConfigFn func() (*config.Config, error),
+	isDaemonRunning daemonRunningFunc,
+	noticePrinter noticePrinterFunc,
+	checkerFactory checkerFactoryFunc,
+	runForegroundFn startRunnerFunc,
+	runBackgroundFn startRunnerFunc,
+) error {
+	cfg, err := loadConfigFn()
 	if err != nil {
 		return err
 	}
 
 	// Check if already running.
-	if daemon.IsRunning(cfg.Daemon.PIDFile) {
+	if isDaemonRunning(cfg.Daemon.PIDFile) {
 		return fmt.Errorf("daemon is already running (see %s)", cfg.Daemon.PIDFile)
 	}
 
-	if foreground {
-		return runForeground(cfg)
+	if shouldCheckForUpdates() {
+		noticePrinter(version, os.Stdout, checkerFactory(version))
 	}
-	return runBackground(cfg)
+
+	if foreground {
+		return runForegroundFn(cfg)
+	}
+	return runBackgroundFn(cfg)
 }
 
 // runForeground configures logging and runs the daemon in the current process.
