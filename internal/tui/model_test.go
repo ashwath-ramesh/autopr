@@ -171,6 +171,13 @@ func TestListViewSortIndicatorInHeader(t *testing.T) {
 	if !strings.Contains(view, "PROJECT ▲") {
 		t.Fatalf("expected active sort indicator on PROJECT header, got:\n%s", view)
 	}
+
+	m.sortColumn = "created_at"
+	m.sortAsc = false
+	view = m.listView()
+	if !strings.Contains(view, "UPDATED ▼") {
+		t.Fatalf("expected active sort indicator on UPDATED header for created_at sort, got:\n%s", view)
+	}
 }
 
 func TestListViewSortFooterHints(t *testing.T) {

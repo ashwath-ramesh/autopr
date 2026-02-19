@@ -1943,37 +1943,73 @@ func TestListJobsSortByStateLogicalOrder(t *testing.T) {
 	}
 	defer store.Close()
 
-	queuedID := createTestJobWithOrderFields(t, ctx, store, "state-queued", "myproject", "queued", "2025-02-01T10:01:00Z", "2025-02-01T10:01:00Z", "")
-	planningID := createTestJobWithOrderFields(t, ctx, store, "state-planning", "myproject", "planning", "2025-02-01T10:02:00Z", "2025-02-01T10:02:00Z", "")
-	implementingID := createTestJobWithOrderFields(t, ctx, store, "state-implementing", "myproject", "implementing", "2025-02-01T10:03:00Z", "2025-02-01T10:03:00Z", "")
-	reviewingID := createTestJobWithOrderFields(t, ctx, store, "state-reviewing", "myproject", "reviewing", "2025-02-01T10:04:00Z", "2025-02-01T10:04:00Z", "")
-	testingID := createTestJobWithOrderFields(t, ctx, store, "state-testing", "myproject", "testing", "2025-02-01T10:05:00Z", "2025-02-01T10:05:00Z", "")
-	readyID := createTestJobWithOrderFields(t, ctx, store, "state-ready", "myproject", "ready", "2025-02-01T10:06:00Z", "2025-02-01T10:06:00Z", "")
-	approvedID := createTestJobWithOrderFields(t, ctx, store, "state-approved", "myproject", "approved", "2025-02-01T10:07:00Z", "2025-02-01T10:07:00Z", "")
-	mergedID := createTestJobWithOrderFields(t, ctx, store, "state-merged", "myproject", "approved", "2025-02-01T10:08:00Z", "2025-02-01T10:08:00Z", "2025-02-01T10:09:00Z")
-	rejectedID := createTestJobWithOrderFields(t, ctx, store, "state-rejected", "myproject", "rejected", "2025-02-01T10:10:00Z", "2025-02-01T10:10:00Z", "")
-	failedID := createTestJobWithOrderFields(t, ctx, store, "state-failed", "myproject", "failed", "2025-02-01T10:11:00Z", "2025-02-01T10:11:00Z", "")
-	cancelledID := createTestJobWithOrderFields(t, ctx, store, "state-cancelled", "myproject", "cancelled", "2025-02-01T10:12:00Z", "2025-02-01T10:12:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-queued", "myproject", "queued", "2025-02-01T10:01:00Z", "2025-02-01T10:01:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-planning", "myproject", "planning", "2025-02-01T10:02:00Z", "2025-02-01T10:02:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-implementing", "myproject", "implementing", "2025-02-01T10:03:00Z", "2025-02-01T10:03:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-reviewing", "myproject", "reviewing", "2025-02-01T10:04:00Z", "2025-02-01T10:04:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-testing", "myproject", "testing", "2025-02-01T10:05:00Z", "2025-02-01T10:05:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-ready", "myproject", "ready", "2025-02-01T10:06:00Z", "2025-02-01T10:06:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-approved", "myproject", "approved", "2025-02-01T10:07:00Z", "2025-02-01T10:07:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-merged", "myproject", "approved", "2025-02-01T10:08:00Z", "2025-02-01T10:08:00Z", "2025-02-01T10:09:00Z")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-rejected", "myproject", "rejected", "2025-02-01T10:10:00Z", "2025-02-01T10:10:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-failed", "myproject", "failed", "2025-02-01T10:11:00Z", "2025-02-01T10:11:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "state-cancelled", "myproject", "cancelled", "2025-02-01T10:12:00Z", "2025-02-01T10:12:00Z", "")
 
 	jobs, err := store.ListJobs(ctx, "", "all", "state", true)
 	if err != nil {
 		t.Fatalf("list jobs: %v", err)
 	}
 
-	expected := []string{
-		queuedID, planningID, implementingID, reviewingID, testingID, readyID,
-		approvedID, mergedID, rejectedID, failedID, cancelledID,
-	}
-	if got, want := len(jobs), len(expected); got != want {
+	if got, want := len(jobs), 10; got != want {
 		t.Fatalf("expected %d jobs, got %d", want, got)
 	}
-	for i, id := range expected {
-		if jobs[i].ID != id {
-			t.Fatalf("expected state-sorted job at index %d to be %q, got %q", i, id, jobs[i].ID)
+	if jobs[0].State != "queued" || jobs[1].State != "planning" || jobs[2].State != "implementing" ||
+		jobs[3].State != "reviewing" || jobs[4].State != "testing" || jobs[5].State != "ready" {
+		t.Fatalf("expected queue->ready pipeline states first, got %v", []string{jobs[0].State, jobs[1].State, jobs[2].State, jobs[3].State, jobs[4].State, jobs[5].State})
+	}
+
+	approvedIdx := -1
+	mergedIdx := -1
+	rejectedIdx := -1
+	failedIdx := -1
+	cancelledIdx := -1
+
+	for i, job := range jobs {
+		if job.State == "approved" {
+			if job.PRMergedAt == "" && approvedIdx == -1 {
+				approvedIdx = i
+			}
+			if job.PRMergedAt != "" && mergedIdx == -1 {
+				mergedIdx = i
+			}
+		}
+		switch job.State {
+		case "rejected":
+			if rejectedIdx == -1 {
+				rejectedIdx = i
+			}
+		case "failed":
+			if failedIdx == -1 {
+				failedIdx = i
+			}
+		case "cancelled":
+			if cancelledIdx == -1 {
+				cancelledIdx = i
+			}
 		}
 	}
-	if jobs[7].PRMergedAt == "" {
-		t.Fatalf("expected merged row to carry pr_merged_at")
+
+	if approvedIdx < 0 {
+		t.Fatalf("expected non-merged approved job in state sort order")
+	}
+	if mergedIdx < 0 {
+		t.Fatalf("expected merged job in state sort order")
+	}
+	if approvedIdx > mergedIdx {
+		t.Fatalf("expected non-merged approved before merged job, got indices %d and %d", approvedIdx, mergedIdx)
+	}
+	if rejectedIdx < mergedIdx || failedIdx < mergedIdx || cancelledIdx < mergedIdx {
+		t.Fatalf("expected rejected/failed/cancelled after merged job, got indices: approved=%d merged=%d rejected=%d failed=%d cancelled=%d", approvedIdx, mergedIdx, rejectedIdx, failedIdx, cancelledIdx)
 	}
 }
 

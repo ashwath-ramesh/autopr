@@ -1004,24 +1004,27 @@ func (m Model) listView() string {
 		b.WriteString(dimStyle.Render("No jobs found. Waiting for issues..."))
 		b.WriteString("\n")
 	} else {
-		sortLabel := func(column, base string) string {
-			if m.sortColumn != column {
-				return base
+		sortLabel := func(columns []string, base string) string {
+			for _, column := range columns {
+				if m.sortColumn != column {
+					continue
+				}
+				if m.sortAsc {
+					return base + " ▲"
+				}
+				return base + " ▼"
 			}
-			if m.sortAsc {
-				return base + " ▲"
-			}
-			return base + " ▼"
+			return base
 		}
 
 		header := "  " +
 			headerStyle.Render(padRight("JOB", colJob)) +
-			headerStyle.Render(padRight(sortLabel("state", "STATE"), colState)) +
-			headerStyle.Render(padRight(sortLabel("project", "PROJECT"), colProject)) +
+			headerStyle.Render(padRight(sortLabel([]string{"state"}, "STATE"), colState)) +
+			headerStyle.Render(padRight(sortLabel([]string{"project"}, "PROJECT"), colProject)) +
 			headerStyle.Render(padRight("SOURCE", colSource)) +
 			headerStyle.Render(padRight("RETRY", colRetry)) +
 			headerStyle.Render(padRight("ISSUE", colIssue)) +
-			headerStyle.Render(sortLabel("updated_at", "UPDATED"))
+			headerStyle.Render(sortLabel([]string{"updated_at", "created_at"}, "UPDATED"))
 		b.WriteString(header)
 		b.WriteString("\n")
 

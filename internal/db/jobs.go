@@ -337,6 +337,7 @@ CASE
     WHEN j.state = 'reviewing' THEN 4
     WHEN j.state = 'testing' THEN 5
     WHEN j.state = 'ready' THEN 6
+    WHEN j.state = 'approved' AND COALESCE(j.pr_merged_at, '') <> '' THEN 8
     WHEN j.state = 'approved' THEN 7
     WHEN COALESCE(j.pr_merged_at, '') <> '' THEN 8
     WHEN j.state = 'rejected' THEN 9
