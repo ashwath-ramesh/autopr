@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"autopr/internal/config"
 	"autopr/internal/db"
@@ -1380,6 +1381,39 @@ func TestStartTimeFormattingHelpers(t *testing.T) {
 	}
 }
 
+func TestFormatTimestampLocal(t *testing.T) {
+	t.Parallel()
+
+	const (
+		ts      = "2025-02-19T14:04:05Z"
+		tsNanos = "2025-02-19T14:04:05.999999999Z"
+	)
+
+	parsed, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		t.Fatalf("parse %q: %v", ts, err)
+	}
+	if got, want := formatTimestampLocal(ts, "15:04:05"), parsed.In(time.Local).Format("15:04:05"); got != want {
+		t.Fatalf("formatTimestampLocal(%q, HH:MM:SS) = %q, want %q", ts, got, want)
+	}
+	if got, want := formatTimestampLocal(ts, "2006-01-02 15:04:05"), parsed.In(time.Local).Format("2006-01-02 15:04:05"); got != want {
+		t.Fatalf("formatTimestampLocal(%q, datetime) = %q, want %q", ts, got, want)
+	}
+	parsedNanos, err := time.Parse(time.RFC3339Nano, tsNanos)
+	if err != nil {
+		t.Fatalf("parse %q: %v", tsNanos, err)
+	}
+	if got, want := formatTimestampLocal(tsNanos, "15:04:05"), parsedNanos.In(time.Local).Format("15:04:05"); got != want {
+		t.Fatalf("formatTimestampLocal(%q, HH:MM:SS) = %q, want %q", tsNanos, got, want)
+	}
+	if got, want := formatTimestampLocal("", "15:04:05"), ""; got != want {
+		t.Fatalf("formatTimestampLocal(empty) = %q, want %q", got, want)
+	}
+	if got, want := formatTimestampLocal("bad-time", "15:04:05"), "bad-time"; got != want {
+		t.Fatalf("formatTimestampLocal(bad) = %q, want %q", got, want)
+	}
+}
+
 func TestListViewUpdatedTimestampUsesYYYYMMDDHHMMSS(t *testing.T) {
 	t.Parallel()
 
@@ -1399,8 +1433,9 @@ func TestListViewUpdatedTimestampUsesYYYYMMDDHHMMSS(t *testing.T) {
 	}
 
 	view := m.listView()
-	if !strings.Contains(view, "2025-02-19 14:04:05") {
-		t.Fatalf("expected formatted updated timestamp in list view, got:\n%s", view)
+	expected := formatTimestampLocal("2025-02-19T14:04:05Z", "15:04:05")
+	if !strings.Contains(view, expected) {
+		t.Fatalf("expected formatted updated timestamp in list view (%q), got:\n%s", expected, view)
 	}
 }
 
@@ -1550,7 +1585,7 @@ func TestSyntheticSessionViewsCarryStartTimes(t *testing.T) {
 	if got, want := mergedView.selectedSession.CreatedAt, "2025-02-19T14:04:05Z"; got != want {
 		t.Fatalf("merged view created_at = %q, want %q", got, want)
 	}
-	if !strings.Contains(mergedView.selectedSession.ResponseText, "2025-02-19 14:04:05") {
+	if !strings.Contains(mergedView.selectedSession.ResponseText, formatTimestampLocal("2025-02-19T14:04:05Z", "2006-01-02 15:04:05")) {
 		t.Fatalf("expected merged markdown to format PR merged timestamp, got:\n%s", mergedView.selectedSession.ResponseText)
 	}
 
@@ -1558,7 +1593,7 @@ func TestSyntheticSessionViewsCarryStartTimes(t *testing.T) {
 	if got, want := closedView.selectedSession.CreatedAt, "2025-02-19T14:05:06Z"; got != want {
 		t.Fatalf("pr closed view created_at = %q, want %q", got, want)
 	}
-	if !strings.Contains(closedView.selectedSession.ResponseText, "2025-02-19 14:05:06") {
+	if !strings.Contains(closedView.selectedSession.ResponseText, formatTimestampLocal("2025-02-19T14:05:06Z", "2006-01-02 15:04:05")) {
 		t.Fatalf("expected pr-closed markdown to format PR closed timestamp, got:\n%s", closedView.selectedSession.ResponseText)
 	}
 }
