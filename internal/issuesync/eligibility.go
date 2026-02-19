@@ -11,7 +11,7 @@ type issueEligibility struct {
 	EvaluatedAt string
 }
 
-func evaluateGitHubIssueEligibility(includeLabels, issueLabels []string, evaluatedAt time.Time) issueEligibility {
+func evaluateIssueEligibility(includeLabels, issueLabels []string, evaluatedAt time.Time) issueEligibility {
 	required := normalizeLabelSet(includeLabels)
 	if evaluatedAt.IsZero() {
 		evaluatedAt = time.Now().UTC()

@@ -287,6 +287,126 @@ func TestIssueHookCloseLeavesNonCancellableJobUnchanged(t *testing.T) {
 	}
 }
 
+func TestIssueHookLabelGateSkipsUnlabeled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	store, err := db.Open(filepath.Join(t.TempDir(), "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{MaxIterations: 3},
+		Projects: []config.ProjectConfig{
+			{
+				Name: "test-project",
+				GitLab: &config.ProjectGitLab{
+					ProjectID:     "123",
+					IncludeLabels: []string{"autopr"},
+				},
+			},
+		},
+	}
+	jobCh := make(chan string, 1)
+	srv := NewServer(cfg, store, jobCh)
+
+	// Send an issue with only "bug" label — should be skipped.
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(issueHookPayload(t, 123, 50, "open", "opened")))
+	req.Header.Set("X-Gitlab-Event", "Issue Hook")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// No job should have been created.
+	var jobCount int
+	if err := store.Reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&jobCount); err != nil {
+		t.Fatalf("count jobs: %v", err)
+	}
+	if jobCount != 0 {
+		t.Fatalf("expected no jobs for unlabeled webhook issue, got %d", jobCount)
+	}
+
+	select {
+	case id := <-jobCh:
+		t.Fatalf("unexpected job on channel: %s", id)
+	default:
+	}
+}
+
+func TestIssueHookLabelGateCreatesJobForLabeled(t *testing.T) {
+	t.Parallel()
+
+	store, err := db.Open(filepath.Join(t.TempDir(), "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{MaxIterations: 3},
+		Projects: []config.ProjectConfig{
+			{
+				Name: "test-project",
+				GitLab: &config.ProjectGitLab{
+					ProjectID:     "123",
+					IncludeLabels: []string{"autopr"},
+				},
+			},
+		},
+	}
+	jobCh := make(chan string, 1)
+	srv := NewServer(cfg, store, jobCh)
+
+	// Send an issue with "autopr" label — should create a job.
+	req := httptest.NewRequest(http.MethodPost, "/webhook", bytes.NewReader(issueHookPayloadWithLabels(t, 123, 51, "open", "opened", []string{"AutoPR", "feature"})))
+	req.Header.Set("X-Gitlab-Event", "Issue Hook")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-jobCh:
+		// Job created as expected.
+	default:
+		t.Fatalf("expected job on channel for labeled webhook issue")
+	}
+}
+
+func issueHookPayloadWithLabels(t *testing.T, projectID, iid int, action, state string, labels []string) []byte {
+	t.Helper()
+	labelMaps := make([]map[string]any, 0, len(labels))
+	for _, l := range labels {
+		labelMaps = append(labelMaps, map[string]any{"title": l})
+	}
+	body, err := json.Marshal(map[string]any{
+		"object_kind": "issue",
+		"object_attributes": map[string]any{
+			"iid":         iid,
+			"title":       "issue title",
+			"description": "issue description",
+			"url":         fmt.Sprintf("https://gitlab.local/group/repo/-/issues/%d", iid),
+			"action":      action,
+			"state":       state,
+		},
+		"project": map[string]any{
+			"id": projectID,
+		},
+		"labels": labelMaps,
+	})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	return body
+}
+
 func issueHookPayload(t *testing.T, projectID, iid int, action, state string) []byte {
 	t.Helper()
 	body, err := json.Marshal(map[string]any{
