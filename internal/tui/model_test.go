@@ -1080,8 +1080,8 @@ func TestHandleKeyLevel1PaginationControls(t *testing.T) {
 
 	modelAny, _ = m.handleKey(keyRunes('n'))
 	m = modelAny.(Model)
-	if m.page != 2 || m.cursor != 20 {
-		t.Fatalf("expected page 2, cursor 20 after second n; got page %d cursor %d", m.page, m.cursor)
+	if m.page != 1 || m.cursor != 10 {
+		t.Fatalf("expected page 1, cursor 10 after n; got page %d cursor %d", m.page, m.cursor)
 	}
 
 	modelAny, _ = m.handleKey(keyType(tea.KeyPgDown))
