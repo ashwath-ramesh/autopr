@@ -10,6 +10,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type statusJobCounts struct {
+	Queued       int `json:"queued"`
+	Planning     int `json:"planning"`
+	Implementing int `json:"implementing"`
+	Reviewing    int `json:"reviewing"`
+	Testing      int `json:"testing"`
+	NeedsPR      int `json:"needs_pr"`
+	Failed       int `json:"failed"`
+	Cancelled    int `json:"cancelled"`
+	Rejected     int `json:"rejected"`
+	PRCreated    int `json:"pr_created"`
+	Merged       int `json:"merged"`
+}
+
+type statusOutput struct {
+	Running   bool            `json:"running"`
+	PID       string          `json:"pid"`
+	JobCounts statusJobCounts `json:"job_counts"`
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status and queue depth",
@@ -87,25 +107,25 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if prCreated < 0 {
 		prCreated = 0
 	}
-	jobCounts := map[string]int{
-		"queued":       counts["queued"],
-		"planning":     counts["planning"],
-		"implementing": counts["implementing"],
-		"reviewing":    counts["reviewing"],
-		"testing":      counts["testing"],
-		"needs_pr":     counts["ready"],
-		"failed":       counts["failed"],
-		"cancelled":    counts["cancelled"],
-		"rejected":     counts["rejected"],
-		"pr_created":   prCreated,
-		"merged":       merged,
+	jobCounts := statusJobCounts{
+		Queued:       counts["queued"],
+		Planning:     counts["planning"],
+		Implementing: counts["implementing"],
+		Reviewing:    counts["reviewing"],
+		Testing:      counts["testing"],
+		NeedsPR:      counts["ready"],
+		Failed:       counts["failed"],
+		Cancelled:    counts["cancelled"],
+		Rejected:     counts["rejected"],
+		PRCreated:    prCreated,
+		Merged:       merged,
 	}
 
 	if jsonOut {
-		printJSON(map[string]any{
-			"running":    running,
-			"pid":        pidStr,
-			"job_counts": jobCounts,
+		printJSON(statusOutput{
+			Running:   running,
+			PID:       pidStr,
+			JobCounts: jobCounts,
 		})
 		return nil
 	}

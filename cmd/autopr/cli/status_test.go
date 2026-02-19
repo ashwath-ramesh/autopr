@@ -195,6 +195,15 @@ func writeStatusConfigWithPID(t *testing.T, dir, pidPath string) string {
 
 [daemon]
 pid_file = %q
+
+[[projects]]
+name = "project"
+repo_url = "https://github.com/autopr/placeholder"
+test_cmd = "echo ok"
+
+[projects.github]
+owner = "autopr"
+repo = "placeholder"
 `, dbPath, pidPath)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
