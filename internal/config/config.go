@@ -160,8 +160,9 @@ type ProjectGitHub struct {
 }
 
 type ProjectSentry struct {
-	Org     string `toml:"org"`
-	Project string `toml:"project"`
+	Org          string `toml:"org"`
+	Project      string `toml:"project"`
+	AssignedTeam string `toml:"assigned_team"`
 }
 
 type ProjectPrompts struct {
