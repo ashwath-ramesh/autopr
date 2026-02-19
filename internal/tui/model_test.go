@@ -608,6 +608,12 @@ func TestListViewUpdatedTimestampUsesYYYYMMDDHHMMSS(t *testing.T) {
 		UpdatedAt: "2025-02-19T14:04:05Z",
 	}
 	m := Model{
+		cfg: &config.Config{
+			Daemon: config.DaemonConfig{
+				SyncInterval: "5m",
+				MaxWorkers:   1,
+			},
+		},
 		jobs: []db.Job{job},
 	}
 
