@@ -1863,6 +1863,100 @@ func TestListReadyOrApprovedJobsWithBranchNoPR(t *testing.T) {
 	}
 }
 
+func TestListJobsSupportsProjectFilterAndActiveState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	planAlpha := createTestJobWithStateAndProject(t, ctx, store, "plan-1", "planning", "alpha")
+	implAlpha := createTestJobWithStateAndProject(t, ctx, store, "impl-1", "implementing", "alpha")
+	testBeta := createTestJobWithStateAndProject(t, ctx, store, "test-1", "testing", "beta")
+	_ = createTestJobWithStateAndProject(t, ctx, store, "ready-1", "ready", "alpha")
+	_ = createTestJobWithStateAndProject(t, ctx, store, "other-1", "ready", "beta")
+
+	active, err := store.ListJobs(ctx, "", "active")
+	if err != nil {
+		t.Fatalf("list active jobs: %v", err)
+	}
+	if len(active) != 3 {
+		t.Fatalf("expected 3 active jobs, got %d", len(active))
+	}
+	foundActive := map[string]bool{}
+	for _, j := range active {
+		foundActive[j.ID] = true
+	}
+	for _, want := range []string{planAlpha, implAlpha, testBeta} {
+		if !foundActive[want] {
+			t.Fatalf("expected active filter to include job %q", want)
+		}
+	}
+	for _, want := range []string{"ready-1", "other-1"} {
+		if foundActive[want] {
+			t.Fatalf("ready jobs should not be in active filter: %q", want)
+		}
+	}
+
+	alphaActive, err := store.ListJobs(ctx, "alpha", "active")
+	if err != nil {
+		t.Fatalf("list active alpha jobs: %v", err)
+	}
+	if len(alphaActive) != 2 {
+		t.Fatalf("expected 2 active alpha jobs, got %d", len(alphaActive))
+	}
+	foundAlpha := map[string]bool{}
+	for _, j := range alphaActive {
+		if j.ProjectName != "alpha" {
+			t.Fatalf("expected alpha-only active job, got %q", j.ProjectName)
+		}
+		foundAlpha[j.State] = true
+	}
+	for _, want := range []string{"planning", "implementing"} {
+		if !foundAlpha[want] {
+			t.Fatalf("expected alpha active to include %q state", want)
+		}
+	}
+
+	all, err := store.ListJobs(ctx, "beta", "all")
+	if err != nil {
+		t.Fatalf("list beta jobs: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected 2 beta jobs, got %d", len(all))
+	}
+}
+
+func createTestJobWithStateAndProject(t *testing.T, ctx context.Context, store *Store, sourceIssueID, state, project string) string {
+	t.Helper()
+	issueID, err := store.UpsertIssue(ctx, IssueUpsert{
+		ProjectName:   project,
+		Source:        "github",
+		SourceIssueID: sourceIssueID,
+		Title:         sourceIssueID,
+		URL:           "https://github.com/org/repo/issues/" + sourceIssueID,
+		State:         "open",
+	})
+	if err != nil {
+		t.Fatalf("upsert issue %s: %v", sourceIssueID, err)
+	}
+	jobID, err := store.CreateJob(ctx, issueID, project, 3)
+	if err != nil {
+		t.Fatalf("create job %s: %v", sourceIssueID, err)
+	}
+	if _, err := store.Writer.ExecContext(ctx, `
+		UPDATE jobs
+		SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+		WHERE id = ?`, state, jobID); err != nil {
+		t.Fatalf("configure job %s: %v", sourceIssueID, err)
+	}
+	return jobID
+}
+
 func TestEnsureJobApproved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
