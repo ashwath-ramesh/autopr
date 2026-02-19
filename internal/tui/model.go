@@ -1219,8 +1219,9 @@ func (m Model) listView() string {
 	if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
 		hints = append(hints, "c cancel")
 	}
+	hints = append(hints, "F clear filters")
 	if m.filterMode {
-		hints = append(hints, "s state", "p project", "F clear filters", "esc cancel filter")
+		hints = append(hints, "s state", "p project", "esc cancel filter")
 	}
 	hints = append(hints, "r refresh", "q quit")
 	b.WriteString(dimStyle.Render(strings.Join(hints, "  ")))

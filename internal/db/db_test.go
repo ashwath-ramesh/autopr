@@ -1880,6 +1880,13 @@ func TestListJobsSupportsProjectFilterAndActiveState(t *testing.T) {
 	reviewBeta := createTestJobWithStateAndProject(t, ctx, store, "review-1", "reviewing", "beta")
 	_ = createTestJobWithStateAndProject(t, ctx, store, "ready-1", "ready", "alpha")
 	_ = createTestJobWithStateAndProject(t, ctx, store, "other-1", "ready", "beta")
+	mergedAlpha := createTestJobWithStateAndProject(t, ctx, store, "merged-1", "approved", "alpha")
+	if _, err := store.Writer.ExecContext(ctx, `
+UPDATE jobs
+SET pr_merged_at = ?
+WHERE id = ?`, "2026-02-18T00:00:00Z", mergedAlpha); err != nil {
+		t.Fatalf("set merged metadata: %v", err)
+	}
 
 	active, err := store.ListJobs(ctx, "", "active")
 	if err != nil {
@@ -1923,12 +1930,34 @@ func TestListJobsSupportsProjectFilterAndActiveState(t *testing.T) {
 		}
 	}
 
+	merged, err := store.ListJobs(ctx, "", "merged")
+	if err != nil {
+		t.Fatalf("list merged jobs: %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged job, got %d", len(merged))
+	}
+	if merged[0].State != "approved" || merged[0].PRMergedAt != "2026-02-18T00:00:00Z" {
+		t.Fatalf("unexpected merged job record: state=%q mergedAt=%q", merged[0].State, merged[0].PRMergedAt)
+	}
+
+	alphaMerged, err := store.ListJobs(ctx, "alpha", "merged")
+	if err != nil {
+		t.Fatalf("list merged alpha jobs: %v", err)
+	}
+	if len(alphaMerged) != 1 {
+		t.Fatalf("expected 1 alpha merged job, got %d", len(alphaMerged))
+	}
+	if alphaMerged[0].ID != mergedAlpha {
+		t.Fatalf("expected merged alpha job id %q, got %q", mergedAlpha, alphaMerged[0].ID)
+	}
+
 	all, err := store.ListJobs(ctx, "beta", "all")
 	if err != nil {
 		t.Fatalf("list beta jobs: %v", err)
 	}
-	if len(all) != 2 {
-		t.Fatalf("expected 2 beta jobs, got %d", len(all))
+	if len(all) != 3 {
+		t.Fatalf("expected 3 beta jobs, got %d", len(all))
 	}
 }
 

@@ -65,6 +65,9 @@ func TestListViewShowsFilterIndicatorAndFooterHints(t *testing.T) {
 	if !strings.Contains(view, "f filter") {
 		t.Fatalf("expected filter hint, got:\n%s", view)
 	}
+	if !strings.Contains(view, "F clear filters") {
+		t.Fatalf("expected clear filters hint, got:\n%s", view)
+	}
 
 	m.filterMode = true
 	filterModeView := m.listView()
@@ -98,6 +101,39 @@ func TestListViewShowsFilterIndicatorAndFooterHints(t *testing.T) {
 	m = modelAny.(Model)
 	if m.filterState != filterAllState || m.filterProject != filterAllProject {
 		t.Fatalf("expected F to clear filters, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+}
+
+func TestHandleKeyFEntersFilterMode(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-a", State: "ready"},
+		{ID: "ap-job-2", ProjectName: "proj-b", State: "queued"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 1
+
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+
+	if !m.filterMode {
+		t.Fatalf("expected filter mode after pressing f")
+	}
+	if m.filterStateDraft != "ready" {
+		t.Fatalf("expected draft state to match current state, got %q", m.filterStateDraft)
+	}
+	if m.filterProjectDraft != "proj-a" {
+		t.Fatalf("expected draft project to match current project, got %q", m.filterProjectDraft)
+	}
+	if m.filterStateBefore != "ready" {
+		t.Fatalf("expected draft state backup to match current state, got %q", m.filterStateBefore)
+	}
+	if m.filterProjectBefore != "proj-a" {
+		t.Fatalf("expected draft project backup to match current project, got %q", m.filterProjectBefore)
+	}
+	if m.filterCursorBefore != 1 {
+		t.Fatalf("expected cursor backup to match prior cursor, got %d", m.filterCursorBefore)
 	}
 }
 

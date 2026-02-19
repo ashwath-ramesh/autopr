@@ -297,6 +297,9 @@ WHERE 1=1`
 			for _, s := range states {
 				args = append(args, s)
 			}
+		case "merged":
+			q += " AND j.state = ? AND COALESCE(j.pr_merged_at,'') != ''"
+			args = append(args, "approved")
 		default:
 			q += ` AND j.state = ?`
 			args = append(args, state)
