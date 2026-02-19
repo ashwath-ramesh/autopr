@@ -1960,7 +1960,7 @@ func TestListJobsSortByStateLogicalOrder(t *testing.T) {
 		t.Fatalf("list jobs: %v", err)
 	}
 
-	if got, want := len(jobs), 10; got != want {
+	if got, want := len(jobs), 11; got != want {
 		t.Fatalf("expected %d jobs, got %d", want, got)
 	}
 	if jobs[0].State != "queued" || jobs[1].State != "planning" || jobs[2].State != "implementing" ||
