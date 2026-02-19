@@ -628,7 +628,7 @@ func TestDetailViewPipelineHeaderIncludesStartAndDuration(t *testing.T) {
 
 	view := m.detailView()
 	var headerLine string
-	for _, line := range strings.Split(view, "\n") {
+	for line := range strings.SplitSeq(view, "\n") {
 		if strings.Contains(line, "PROVIDER") && strings.Contains(line, "TOKENS") {
 			headerLine = line
 			break

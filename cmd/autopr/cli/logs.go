@@ -314,7 +314,7 @@ func tailJSONL(ctx context.Context, store *db.Store, jobID string, session *db.L
 
 type jsonlMessage struct {
 	Type    string      `json:"type"`
-	Message jsonlAssist `json:"message,omitempty"`
+	Message jsonlAssist `json:"message"`
 	Result  string      `json:"result,omitempty"`
 	Item    *jsonlItem  `json:"item,omitempty"`
 	Usage   *jsonlUsage `json:"usage,omitempty"`
@@ -322,7 +322,7 @@ type jsonlMessage struct {
 
 type jsonlAssist struct {
 	Content []jsonlBlock `json:"content,omitempty"`
-	Usage   jsonlUsage   `json:"usage,omitempty"`
+	Usage   jsonlUsage   `json:"usage"`
 }
 
 type jsonlBlock struct {

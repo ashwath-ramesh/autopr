@@ -43,7 +43,6 @@ func TestEvaluateGitHubIssueEligibility(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := evaluateGitHubIssueEligibility(tc.includeLabels, tc.issueLabels, now)
@@ -279,7 +278,6 @@ func TestSyncGitHubIssuesClosedIssueDoesNotTouchNonCancellableStates(t *testing.
 
 	tests := []string{"ready", "approved", "rejected", "failed", "cancelled"}
 	for _, state := range tests {
-		state := state
 		t.Run(state, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()

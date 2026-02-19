@@ -32,9 +32,10 @@ func NewPool(n int, store *db.Store, pipeline *pipeline.Runner, jobCh <-chan str
 
 func (p *Pool) Start(ctx context.Context) {
 	ctx, p.cancel = context.WithCancel(ctx)
-	for i := 0; i < p.n; i++ {
-		p.wg.Add(1)
-		go p.worker(ctx, i)
+	for i := range p.n {
+		p.wg.Go(func() {
+			p.worker(ctx, i)
+		})
 	}
 }
 
@@ -46,7 +47,6 @@ func (p *Pool) Stop() {
 }
 
 func (p *Pool) worker(ctx context.Context, id int) {
-	defer p.wg.Done()
 	slog.Debug("worker started", "id", id)
 
 	poll := time.NewTicker(5 * time.Second)

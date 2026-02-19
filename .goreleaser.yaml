@@ -3,6 +3,8 @@ version: 2
 builds:
   - main: ./cmd/autopr
     binary: ap
+    env:
+      - CGO_ENABLED=1
     ldflags:
       - -s -w
       - -X autopr/cmd/autopr/cli.version={{.Version}}

@@ -219,7 +219,7 @@ WHERE id = ?`, eventID); err != nil {
 	if err != nil {
 		t.Fatalf("enqueue exhausted event: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if err := store.MarkNotificationEventFailed(ctx, exhaustedID, "boom"); err != nil {
 			t.Fatalf("mark failed %d: %v", i, err)
 		}

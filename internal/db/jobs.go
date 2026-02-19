@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -127,12 +128,9 @@ type Job struct {
 }
 
 func (s *Store) CreateJob(ctx context.Context, autoprIssueID, projectName string, maxIterations int) (string, error) {
-	id, err := newJobID()
-	if err != nil {
-		return "", err
-	}
+	id := newJobID()
 	const q = `INSERT INTO jobs(id, autopr_issue_id, project_name, state, max_iterations) VALUES(?,?,?,'queued',?)`
-	_, err = s.Writer.ExecContext(ctx, q, id, autoprIssueID, projectName, maxIterations)
+	_, err := s.Writer.ExecContext(ctx, q, id, autoprIssueID, projectName, maxIterations)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return "", ErrDuplicateActiveJob
@@ -170,13 +168,7 @@ RETURNING id`
 // TransitionState validates and performs a state transition on a job.
 func (s *Store) TransitionState(ctx context.Context, jobID, from, to string) error {
 	allowed := ValidTransitions[from]
-	valid := false
-	for _, s := range allowed {
-		if s == to {
-			valid = true
-			break
-		}
-	}
+	valid := slices.Contains(allowed, to)
 	if !valid {
 		return fmt.Errorf("invalid transition: %s -> %s", from, to)
 	}
@@ -1103,10 +1095,8 @@ FROM llm_sessions WHERE job_id = ? AND status = 'running' ORDER BY id DESC LIMIT
 
 // Helpers.
 
-func newJobID() (string, error) {
+func newJobID() string {
 	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate job id: %w", err)
-	}
-	return "ap-job-" + strings.ToLower(hex.EncodeToString(buf)), nil
+	rand.Read(buf)
+	return "ap-job-" + strings.ToLower(hex.EncodeToString(buf))
 }

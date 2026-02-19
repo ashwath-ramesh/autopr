@@ -101,24 +101,20 @@ func Run(cfg *config.Config, foreground bool) error {
 	var wg sync.WaitGroup
 
 	// Webhook server goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		slog.Info("webhook server starting", "addr", httpSrv.Addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("webhook server error", "err", err)
 		}
-	}()
+	})
 
 	// Sync loop goroutine.
 	syncInterval, _ := time.ParseDuration(cfg.Daemon.SyncInterval)
 	if syncInterval > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			syncer := issuesync.NewSyncer(cfg, store, jobCh)
 			syncer.RunLoop(ctx, syncInterval)
-		}()
+		})
 	}
 
 	// Notification dispatcher goroutine.
@@ -127,11 +123,9 @@ func Run(cfg *config.Config, foreground bool) error {
 		notify.BuildSenders(cfg.Notifications, nil),
 		cfg.Notifications.Triggers,
 	)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		notificationDispatcher.Run(ctx)
-	}()
+	})
 
 	slog.Info("daemon started", "workers", cfg.Daemon.MaxWorkers, "webhook_port", cfg.Daemon.WebhookPort)
 

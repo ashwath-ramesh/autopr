@@ -35,7 +35,7 @@ ap upgrade
 ap upgrade --check
 ```
 
-**From source (any platform with Go 1.23+):**
+**From source (any platform with Go 1.26+):**
 
 ```bash
 go build -o ap ./cmd/autopr && mv ap /usr/local/bin/
