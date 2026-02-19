@@ -81,6 +81,8 @@ type Model struct {
 	cursor        int
 	sortColumn    string
 	sortAsc       bool
+	page          int
+	pageSize      int
 	daemonRunning bool
 
 	// Level 2: job detail + session list
@@ -118,6 +120,8 @@ func NewModel(store *db.Store, cfg *config.Config) Model {
 		sortColumn:    "updated_at",
 		sortAsc:       false,
 		daemonRunning: isDaemonRunning(cfg.Daemon.PIDFile),
+		page:          0,
+		pageSize:      1,
 	}
 }
 
@@ -427,6 +431,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.pageSize = m.computedPageSize()
+		m.page, m.cursor = clampPageAndCursor(len(m.jobs), m.page, m.cursor, m.pageSize)
 	case tickMsg:
 		m.daemonRunning = isDaemonRunning(m.cfg.Daemon.PIDFile)
 		cmds := []tea.Cmd{tick()}
@@ -440,11 +446,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case jobsMsg:
 		m.jobs = msg
-		if len(m.jobs) == 0 {
-			m.cursor = 0
-		} else if m.cursor >= len(m.jobs) {
-			m.cursor = len(m.jobs) - 1
-		}
+		m.page, m.cursor = clampPageAndCursor(len(m.jobs), m.page, m.cursor, m.pageSize)
 		m.err = nil
 		// Re-sync selected pointer to new slice so keybindings see fresh state.
 		if m.selected != nil {
@@ -623,14 +625,62 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	pageSize := m.pageSize
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	totalJobs := len(m.jobs)
+	totalPages := m.totalPages(totalJobs)
+
+	targetPage := m.page
 	switch key {
+	case "n", "pgdown", "pagedown":
+		targetPage++
+		m.page, _ = clampPageAndCursor(totalJobs, targetPage, pageStart(targetPage, pageSize), pageSize)
+		m.cursor = pageStart(m.page, pageSize)
+		return m, nil
+	case "p", "pgup", "pageup":
+		targetPage--
+		m.page, _ = clampPageAndCursor(totalJobs, targetPage, pageStart(targetPage, pageSize), pageSize)
+		m.cursor = pageStart(m.page, pageSize)
+		return m, nil
+	case "g":
+		m.page, _ = clampPageAndCursor(totalJobs, 0, 0, pageSize)
+		m.cursor = pageStart(m.page, pageSize)
+		return m, nil
+	case "G":
+		last := totalPages - 1
+		if last < 0 {
+			last = 0
+		}
+		m.page, _ = clampPageAndCursor(totalJobs, last, pageStart(last, pageSize), pageSize)
+		m.cursor = pageStart(m.page, pageSize)
+		return m, nil
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
+		m.page, m.cursor = clampPageAndCursor(totalJobs, m.page, m.cursor, pageSize)
+		start := pageStart(m.page, pageSize)
+		end := min(start+pageSize, totalJobs)
+		if start >= end {
+			return m, nil
+		}
+		if totalJobs > 0 {
+			if m.cursor == start {
+				m.cursor = end - 1
+			} else {
+				m.cursor--
+			}
 		}
 	case "down", "j":
-		if m.cursor < len(m.jobs)-1 {
+		m.page, m.cursor = clampPageAndCursor(totalJobs, m.page, m.cursor, pageSize)
+		start := pageStart(m.page, pageSize)
+		end := min(start+pageSize, totalJobs)
+		if start >= end {
+			return m, nil
+		}
+		if m.cursor < end-1 {
 			m.cursor++
+		} else {
+			m.cursor = start
 		}
 	case "s":
 		m.sortColumn = nextSortColumn(m.sortColumn)
@@ -641,12 +691,12 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		m.cursor = 0
 		return m, m.fetchJobs
 	case "enter":
-		if m.cursor < len(m.jobs) {
+		if m.cursor < totalJobs {
 			m.selected = &m.jobs[m.cursor]
 			return m, m.fetchSessions
 		}
 	case "c":
-		if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
+		if m.cursor < totalJobs && db.IsCancellableState(m.jobs[m.cursor].State) {
 			startConfirm(&m, "cancel", m.jobs[m.cursor].ID)
 		}
 	case "r":
@@ -946,6 +996,11 @@ func (m Model) View() string {
 func (m Model) listView() string {
 	var b strings.Builder
 	w := m.cw()
+	pageSize := m.pageSize
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	page, _ := clampPageAndCursor(len(m.jobs), m.page, m.cursor, pageSize)
 
 	// ── Title bar ──
 	b.WriteString(titleStyle.Render("AUTOPR"))
@@ -1022,6 +1077,8 @@ func (m Model) listView() string {
 			timestampLabel = "CREATED"
 		}
 
+		start := pageStart(page, pageSize)
+		end := min(start+pageSize, len(m.jobs))
 		header := "  " +
 			headerStyle.Render(padRight("JOB", colJob)) +
 			headerStyle.Render(padRight(sortLabel([]string{"state"}, "STATE"), colState)) +
@@ -1033,9 +1090,10 @@ func (m Model) listView() string {
 		b.WriteString(header)
 		b.WriteString("\n")
 
-		for i, job := range m.jobs {
+		for i, job := range m.jobs[start:end] {
 			cursor := "  "
-			if i == m.cursor {
+			jobIdx := start + i
+			if jobIdx == m.cursor {
 				cursor = "> "
 			}
 
@@ -1066,7 +1124,7 @@ func (m Model) listView() string {
 				padRight(title, colIssue) +
 				dimStyle.Render(updated)
 
-			if i == m.cursor {
+			if jobIdx == m.cursor {
 				line = selectedStyle.Render(line)
 			}
 			b.WriteString(line)
@@ -1080,7 +1138,14 @@ func (m Model) listView() string {
 		b.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Render(m.confirmPrompt()))
 		return b.String()
 	}
-	hints := []string{"j/k navigate", "enter details"}
+	pageCount := m.totalPages(len(m.jobs))
+	pageLabel := pageCount
+	pageNum := page + 1
+	if pageCount == 0 {
+		pageLabel = 0
+		pageNum = 0
+	}
+	hints := []string{fmt.Sprintf("Page %d/%d (%d jobs)", pageNum, pageLabel, len(m.jobs)), "j/k navigate", "enter details"}
 	if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
 		hints = append(hints, "c cancel")
 	}
@@ -1536,6 +1601,59 @@ func colorDiffLine(line string) string {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+func (m Model) computedPageSize() int {
+	size := m.height - 14
+	if size < 1 {
+		return 1
+	}
+	return size
+}
+
+func (m Model) totalPages(jobCount int) int {
+	pageSize := m.pageSize
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if jobCount <= 0 {
+		return 0
+	}
+	return (jobCount + pageSize - 1) / pageSize
+}
+
+func pageStart(page, size int) int {
+	if size < 1 || page < 0 {
+		return 0
+	}
+	return page * size
+}
+
+func clampPageAndCursor(totalJobs, page, cursor, pageSize int) (int, int) {
+	if pageSize < 1 {
+		pageSize = 1
+	}
+	if totalJobs <= 0 {
+		return 0, 0
+	}
+
+	pages := (totalJobs + pageSize - 1) / pageSize
+	if pages <= 0 {
+		pages = 1
+	}
+	if page < 0 {
+		page = 0
+	} else if page >= pages {
+		page = pages - 1
+	}
+
+	start := pageStart(page, pageSize)
+	end := min(start+pageSize, totalJobs)
+	if cursor < start {
+		cursor = start
+	} else if cursor >= end {
+		cursor = end - 1
+	}
+	return page, cursor
+}
 
 // cw returns content width (terminal width minus frame padding).
 func (m Model) cw() int {
