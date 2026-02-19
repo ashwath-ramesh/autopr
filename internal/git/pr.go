@@ -314,11 +314,11 @@ func CheckGitLabMRStatus(ctx context.Context, token, baseURL, mrURL string) (PRM
 	// Extract project path from URL.
 	// URL format: https://gitlab.com/{group}/{project}/-/merge_requests/{number}
 	trimmed := strings.TrimPrefix(mrURL, baseURL+"/")
-	mrIdx := strings.Index(trimmed, "/-/merge_requests/")
-	if mrIdx < 0 {
+	before, _, ok := strings.Cut(trimmed, "/-/merge_requests/")
+	if !ok {
 		return PRMergeStatus{}, fmt.Errorf("cannot parse project path from URL: %s", mrURL)
 	}
-	projectPath := strings.ReplaceAll(trimmed[:mrIdx], "/", "%2F")
+	projectPath := strings.ReplaceAll(before, "/", "%2F")
 
 	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s", baseURL, projectPath, mrNumber)
 

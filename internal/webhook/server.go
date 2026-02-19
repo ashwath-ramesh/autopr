@@ -61,10 +61,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uptimeSeconds := int(time.Since(s.startedAt).Seconds())
-	if uptimeSeconds < 0 {
-		uptimeSeconds = 0
-	}
+	uptimeSeconds := max(int(time.Since(s.startedAt).Seconds()), 0)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "running",

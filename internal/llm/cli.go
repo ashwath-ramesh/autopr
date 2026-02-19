@@ -180,7 +180,7 @@ type jsonlMessage struct {
 	Type string `json:"type"`
 
 	// Claude format fields.
-	Message jsonlAssist `json:"message,omitempty"`
+	Message jsonlAssist `json:"message"`
 	Result  string      `json:"result,omitempty"`
 
 	// Codex format fields.
@@ -190,7 +190,7 @@ type jsonlMessage struct {
 
 type jsonlAssist struct {
 	Content []jsonlBlock `json:"content,omitempty"`
-	Usage   jsonlUsage   `json:"usage,omitempty"`
+	Usage   jsonlUsage   `json:"usage"`
 }
 
 type jsonlBlock struct {

@@ -159,15 +159,13 @@ func splitLink(s string) []string {
 }
 
 func extractCursor(s string) string {
-	prefix := `cursor="`
-	idx := strings.Index(s, prefix)
-	if idx < 0 {
+	_, after, ok := strings.Cut(s, `cursor="`)
+	if !ok {
 		return ""
 	}
-	start := idx + len(prefix)
-	end := strings.Index(s[start:], `"`)
-	if end < 0 {
-		return s[start:]
+	before, _, ok := strings.Cut(after, `"`)
+	if !ok {
+		return after
 	}
-	return s[start : start+end]
+	return before
 }

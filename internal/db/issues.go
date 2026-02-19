@@ -52,10 +52,7 @@ type IssueUpsert struct {
 }
 
 func (s *Store) UpsertIssue(ctx context.Context, in IssueUpsert) (string, error) {
-	newID, err := newAutoPRIssueID()
-	if err != nil {
-		return "", err
-	}
+	newID := newAutoPRIssueID()
 	now := nowRFC3339()
 	if in.SourceUpdated == "" {
 		in.SourceUpdated = now
@@ -101,7 +98,7 @@ ON CONFLICT(project_name, source, source_issue_id) DO UPDATE SET
   synced_at=excluded.synced_at
 RETURNING autopr_issue_id`
 	var actualID string
-	err = s.Writer.QueryRowContext(ctx, q,
+	err := s.Writer.QueryRowContext(ctx, q,
 		newID, in.ProjectName, in.Source, in.SourceIssueID, in.Title, in.Body, in.URL, in.State,
 		labelsJSON, metaJSON, boolToInt(eligible), skipReason, evaluatedAt, in.SourceUpdated, now,
 	).Scan(&actualID)
@@ -229,12 +226,10 @@ func nowRFC3339() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
-func newAutoPRIssueID() (string, error) {
+func newAutoPRIssueID() string {
 	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate autopr_issue_id: %w", err)
-	}
-	return "ap-" + strings.ToLower(hex.EncodeToString(buf)), nil
+	rand.Read(buf)
+	return "ap-" + strings.ToLower(hex.EncodeToString(buf))
 }
 
 func boolToInt(v bool) int {

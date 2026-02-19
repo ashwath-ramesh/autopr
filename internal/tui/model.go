@@ -893,11 +893,7 @@ func (m Model) enterPRClosedView() Model {
 }
 
 func maxOffset(lines []string, avail int) int {
-	n := len(lines) - avail
-	if n < 0 {
-		return 0
-	}
-	return n
+	return max(len(lines)-avail, 0)
 }
 
 // ── Views ───────────────────────────────────────────────────────────────────
@@ -1091,7 +1087,7 @@ func (m Model) detailView() string {
 		kv("Branch", job.BranchName)
 	}
 	if job.CommitSHA != "" {
-		kv("Commit", job.CommitSHA[:minInt(12, len(job.CommitSHA))])
+		kv("Commit", job.CommitSHA[:min(12, len(job.CommitSHA))])
 	}
 	if job.PRMergedAt != "" {
 		kv("Merged", stateStyle["merged"].Render(job.PRMergedAt))
@@ -1509,10 +1505,7 @@ func (m Model) cw() int {
 
 func (m Model) scrollHeight() int {
 	// Reserve lines for chrome: frame padding(2) + title(1) + separator(1) + metadata(~6) + tabs(2) + footer(2).
-	h := m.height - 16
-	if h < 1 {
-		h = 1
-	}
+	h := max(m.height-16, 1)
 	return h
 }
 
@@ -1572,14 +1565,8 @@ func scrollWindow(lines []string, offset, avail int) (int, int) {
 	if avail < 1 {
 		avail = 1
 	}
-	start := offset
-	if start > len(lines) {
-		start = len(lines)
-	}
-	end := start + avail
-	if end > len(lines) {
-		end = len(lines)
-	}
+	start := min(offset, len(lines))
+	end := min(start+avail, len(lines))
 	return start, end
 }
 
@@ -1632,12 +1619,6 @@ func detailStart(ts string) string {
 	return t.Format("2006-01-02 15:04:05")
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 func truncate(s string, max int) string {
 	if len(s) <= max {

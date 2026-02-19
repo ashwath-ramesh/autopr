@@ -92,7 +92,7 @@ func runDiff(cmd *cobra.Command, args []string) error {
 	}
 
 	// Print with ANSI colors.
-	for _, line := range strings.Split(diffText, "\n") {
+	for line := range strings.SplitSeq(diffText, "\n") {
 		fmt.Println(colorDiffLine(line))
 	}
 	return nil
