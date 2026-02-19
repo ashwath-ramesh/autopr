@@ -37,6 +37,106 @@ func TestFilterGhostSessions(t *testing.T) {
 	}
 }
 
+func TestListViewShowsFilterIndicatorAndFooterHints(t *testing.T) {
+	t.Parallel()
+	jobs := []db.Job{
+		{ID: "ap-job-1", State: "queued", ProjectName: "autopr"},
+		{ID: "ap-job-2", State: "ready", ProjectName: "other"},
+	}
+	m := Model{
+		cfg: &config.Config{
+			Daemon: config.DaemonConfig{
+				SyncInterval: "5m",
+				MaxWorkers:   1,
+			},
+		},
+		jobs:          jobs,
+		allJobsCounts: jobs,
+		filterState:   "ready",
+		filterProject: "autopr",
+		filterMode:    false,
+		cursor:        0,
+	}
+
+	view := m.listView()
+	if !strings.Contains(view, "Filter: state=ready  project=autopr") {
+		t.Fatalf("expected filter indicator, got:\n%s", view)
+	}
+	if !strings.Contains(view, "f filter") {
+		t.Fatalf("expected filter hint, got:\n%s", view)
+	}
+	if !strings.Contains(view, "F clear filters") {
+		t.Fatalf("expected clear filters hint, got:\n%s", view)
+	}
+
+	m.filterMode = true
+	filterModeView := m.listView()
+	for _, want := range []string{"s state", "p project", "F clear filters", "esc cancel filter"} {
+		if !strings.Contains(filterModeView, want) {
+			t.Fatalf("expected filter-mode hint %q, got:\n%s", want, filterModeView)
+		}
+	}
+
+	m = newTestModelForFilterCycle(jobs)
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+	m.cursor = 3
+	modelAny, _ = m.handleKey(keyRunes('s'))
+	m = modelAny.(Model)
+	if m.cursor != 0 {
+		t.Fatalf("expected cursor reset to 0 after filter state change")
+	}
+
+	m.cursor = 3
+	modelAny, _ = m.handleKey(keyRunes('p'))
+	m = modelAny.(Model)
+	if m.cursor != 0 {
+		t.Fatalf("expected cursor reset to 0 after filter project change")
+	}
+
+	m = newTestModelForFilterCycle(jobs)
+	m.filterState = "ready"
+	m.filterProject = "other"
+	modelAny, _ = m.handleKey(keyRunes('F'))
+	m = modelAny.(Model)
+	if m.filterState != filterAllState || m.filterProject != filterAllProject {
+		t.Fatalf("expected F to clear filters, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+}
+
+func TestHandleKeyFEntersFilterMode(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-a", State: "ready"},
+		{ID: "ap-job-2", ProjectName: "proj-b", State: "queued"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 1
+
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+
+	if !m.filterMode {
+		t.Fatalf("expected filter mode after pressing f")
+	}
+	if m.filterStateDraft != "ready" {
+		t.Fatalf("expected draft state to match current state, got %q", m.filterStateDraft)
+	}
+	if m.filterProjectDraft != "proj-a" {
+		t.Fatalf("expected draft project to match current project, got %q", m.filterProjectDraft)
+	}
+	if m.filterStateBefore != "ready" {
+		t.Fatalf("expected draft state backup to match current state, got %q", m.filterStateBefore)
+	}
+	if m.filterProjectBefore != "proj-a" {
+		t.Fatalf("expected draft project backup to match current project, got %q", m.filterProjectBefore)
+	}
+	if m.filterCursorBefore != 1 {
+		t.Fatalf("expected cursor backup to match prior cursor, got %d", m.filterCursorBefore)
+	}
+}
+
 func TestShouldHideGhostSession(t *testing.T) {
 	ghost := db.LLMSessionSummary{Step: "plan", Status: "running", InputTokens: 0, OutputTokens: 0, DurationMS: 0}
 	if !shouldHideGhostSession(ghost, "") {
@@ -369,6 +469,227 @@ func newTestModelWithQueuedJob(t *testing.T, tmp string) (Model, *db.Store, stri
 	return m, store, jobID
 }
 
+type jobSeed struct {
+	state   string
+	project string
+}
+
+func newTestModelWithJobs(t *testing.T, tmp string, seeds []jobSeed) (Model, *db.Store) {
+	t.Helper()
+	ctx := context.Background()
+
+	store, err := db.Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+
+	for i, seed := range seeds {
+		issueID, err := store.UpsertIssue(ctx, db.IssueUpsert{
+			ProjectName:   seed.project,
+			Source:        "github",
+			SourceIssueID: fmt.Sprintf("issue-%d", i+1),
+			Title:         fmt.Sprintf("issue %d", i+1),
+			URL:           fmt.Sprintf("https://github.com/org/repo/issues/%d", i+1),
+			State:         "open",
+		})
+		if err != nil {
+			t.Fatalf("upsert issue %d: %v", i+1, err)
+		}
+		jobID, err := store.CreateJob(ctx, issueID, seed.project, 3)
+		if err != nil {
+			t.Fatalf("create job %d: %v", i+1, err)
+		}
+		if _, err := store.Writer.ExecContext(ctx, `
+			UPDATE jobs
+			SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+			WHERE id = ?`, seed.state, jobID); err != nil {
+			t.Fatalf("configure job %d state %q: %v", i+1, seed.state, err)
+		}
+	}
+
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{
+			PIDFile:      filepath.Join(tmp, "autopr.pid"),
+			SyncInterval: "5m",
+			MaxWorkers:   1,
+		},
+	}
+	m := NewModel(store, cfg)
+	jobs, err := store.ListJobs(ctx, "", "all", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list jobs: %v", err)
+	}
+	m.jobs = jobs
+	return m, store
+}
+
+func newTestModelForFilterCycle(jobs []db.Job) Model {
+	return Model{
+		cfg: &config.Config{
+			Daemon: config.DaemonConfig{
+				SyncInterval: "5m",
+				MaxWorkers:   1,
+			},
+		},
+		jobs:          jobs,
+		allJobsCounts: jobs,
+		filterState:   filterAllState,
+		filterProject: filterAllProject,
+	}
+}
+
+func TestFilterModeCycleStateAndProject(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-b", State: "queued"},
+		{ID: "ap-job-2", ProjectName: "proj-a", State: "ready"},
+		{ID: "ap-job-3", ProjectName: "proj-c", State: "active"},
+	})
+
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+
+	expectedStates := []string{"queued", "active", "ready", "failed", "merged", "rejected", "cancelled", "all"}
+	for _, state := range expectedStates {
+		modelAny, _ = m.handleKey(keyRunes('s'))
+		m = modelAny.(Model)
+		if m.filterState != state {
+			t.Fatalf("expected filter state %q, got %q", state, m.filterState)
+		}
+	}
+
+	expectedProjects := []string{"proj-a", "proj-b", "proj-c", "all"}
+	for _, project := range expectedProjects {
+		modelAny, _ = m.handleKey(keyRunes('p'))
+		m = modelAny.(Model)
+		if m.filterProject != project {
+			t.Fatalf("expected project filter %q, got %q", project, m.filterProject)
+		}
+	}
+	if !m.filterMode {
+		t.Fatalf("expected filter mode to remain active while cycling")
+	}
+}
+
+func TestFilterModeEscCancelsPendingChanges(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-b", State: "queued"},
+		{ID: "ap-job-2", ProjectName: "proj-a", State: "ready"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 1
+
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+	modelAny, _ = m.handleKey(keyRunes('s'))
+	m = modelAny.(Model)
+	if m.filterState == "ready" {
+		t.Fatalf("expected filter state change")
+	}
+	modelAny, _ = m.handleKey(keyRunes('p'))
+	m = modelAny.(Model)
+	if m.filterProject == "proj-a" {
+		t.Fatalf("expected project filter change")
+	}
+
+	modelAny, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = modelAny.(Model)
+	if m.filterMode {
+		t.Fatalf("expected filter mode to exit on esc")
+	}
+	if m.filterState != "ready" || m.filterProject != "proj-a" {
+		t.Fatalf("expected filters to rollback to ready/proj-a, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor to restore to prior position, got %d", m.cursor)
+	}
+}
+
+func TestFilterModeEscRestoresCursor(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-b", State: "queued"},
+		{ID: "ap-job-2", ProjectName: "proj-a", State: "ready"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 1
+
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+	modelAny, _ = m.handleKey(keyRunes('s'))
+	m = modelAny.(Model)
+	modelAny, _ = m.handleKey(keyRunes('p'))
+	m = modelAny.(Model)
+	if m.filterState == "ready" || m.filterProject == "proj-a" {
+		t.Fatalf("expected draft changes after s/p cycling")
+	}
+
+	modelAny, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = modelAny.(Model)
+	if m.filterMode {
+		t.Fatalf("expected filter mode to exit on esc")
+	}
+	if m.filterState != "ready" || m.filterProject != "proj-a" {
+		t.Fatalf("expected pending changes to rollback to ready/proj-a, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor restore to prior position, got %d", m.cursor)
+	}
+
+}
+
+func TestFilterModeClearShortcut(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-b", State: "queued"},
+		{ID: "ap-job-2", ProjectName: "proj-a", State: "ready"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 3
+
+	modelAny, _ := m.handleKey(keyRunes('F'))
+	m = modelAny.(Model)
+	if m.filterState != filterAllState || m.filterProject != filterAllProject {
+		t.Fatalf("expected F to clear all filters, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+	if m.cursor != 0 {
+		t.Fatalf("expected cursor reset on clear")
+	}
+}
+
+func TestFilterModeEscWithoutApplying(t *testing.T) {
+	t.Parallel()
+	m := newTestModelForFilterCycle([]db.Job{
+		{ID: "ap-job-1", ProjectName: "proj-b", State: "queued"},
+		{ID: "ap-job-2", ProjectName: "proj-a", State: "ready"},
+	})
+	m.filterState = "ready"
+	m.filterProject = "proj-a"
+	m.cursor = 1
+	modelAny, _ := m.handleKey(keyRunes('f'))
+	m = modelAny.(Model)
+	modelAny, _ = m.handleKey(keyRunes('s'))
+	m = modelAny.(Model)
+	if m.filterState == "ready" {
+		t.Fatalf("expected draft filter change to happen before esc")
+	}
+	modelAny, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = modelAny.(Model)
+	if m.filterMode {
+		t.Fatalf("expected filter mode to exit on esc")
+	}
+	if m.filterState != "ready" || m.filterProject != "proj-a" {
+		t.Fatalf("expected pending changes not applied after esc, got state=%q project=%q", m.filterState, m.filterProject)
+	}
+	if m.cursor != 1 {
+		t.Fatalf("expected cursor restore after filter cancel, got %d", m.cursor)
+	}
+}
+
 // transitionToReviewing moves a job from queued → planning → implementing → reviewing.
 func transitionToReviewing(t *testing.T, store *db.Store, jobID string) {
 	t.Helper()
@@ -520,6 +841,48 @@ func TestManualRefreshInListViewStillWorks(t *testing.T) {
 	}
 }
 
+func TestManualRefreshHonorsActiveFilters(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	m, store := newTestModelWithJobs(t, tmp, []jobSeed{
+		{state: "ready", project: "alpha"},
+		{state: "queued", project: "alpha"},
+		{state: "ready", project: "beta"},
+		{state: "queued", project: "beta"},
+		{state: "failed", project: "beta"},
+	})
+	defer store.Close()
+
+	m.filterState = "ready"
+	m.filterProject = "alpha"
+
+	_, cmd := m.handleKey(keyRunes('r'))
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch from manual refresh, got %T", msg)
+	}
+
+	var filtered []db.Job
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if msg := c(); msg != nil {
+			if v, ok := msg.(jobsMsg); ok {
+				filtered = append(filtered, v.filtered...)
+			}
+		}
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered job, got %d", len(filtered))
+	}
+	if filtered[0].State != "ready" || filtered[0].ProjectName != "alpha" {
+		t.Fatalf("expected filtered job to be ready/alpha, got %s/%s", filtered[0].State, filtered[0].ProjectName)
+	}
+}
+
 func TestManualRefreshInDetailViewStillWorks(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -534,6 +897,101 @@ func TestManualRefreshInDetailViewStillWorks(t *testing.T) {
 	}
 }
 
+func TestTickRefreshHonorsActiveFilters(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	m, store := newTestModelWithJobs(t, tmp, []jobSeed{
+		{state: "ready", project: "alpha"},
+		{state: "queued", project: "alpha"},
+		{state: "ready", project: "beta"},
+		{state: "queued", project: "beta"},
+		{state: "failed", project: "beta"},
+	})
+	defer store.Close()
+
+	m.filterState = "ready"
+	m.filterProject = "alpha"
+
+	_, cmd := m.Update(tickMsg{})
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch from tick refresh, got %T", msg)
+	}
+
+	var filtered, unfiltered []db.Job
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		switch v := c().(type) {
+		case jobsMsg:
+			filtered = append(filtered, v.filtered...)
+			unfiltered = append(unfiltered, v.unfiltered...)
+		}
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 filtered job, got %d", len(filtered))
+	}
+	if filtered[0].State != "ready" || filtered[0].ProjectName != "alpha" {
+		t.Fatalf("expected filtered job to be ready/alpha, got %s/%s", filtered[0].State, filtered[0].ProjectName)
+	}
+	if len(unfiltered) != 5 {
+		t.Fatalf("expected 5 unfiltered jobs, got %d", len(unfiltered))
+	}
+}
+
+func TestFilteredRefreshPreservesUnfilteredCounters(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+
+	m, store := newTestModelWithJobs(t, tmp, []jobSeed{
+		{state: "ready", project: "alpha"},
+		{state: "queued", project: "alpha"},
+		{state: "ready", project: "beta"},
+		{state: "queued", project: "beta"},
+		{state: "failed", project: "beta"},
+	})
+	defer store.Close()
+
+	m.filterState = "ready"
+	m.filterProject = "alpha"
+
+	_, cmd := m.Update(tickMsg{})
+	msg := cmd()
+	batch, ok := msg.(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("expected batch from tick refresh, got %T", msg)
+	}
+
+	var jobsPayload jobsMsg
+	found := false
+	for _, c := range batch {
+		if c == nil {
+			continue
+		}
+		if msg := c(); msg != nil {
+			if v, ok := msg.(jobsMsg); ok {
+				jobsPayload = v
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected jobs message in tick batch")
+	}
+	modelAny, _ := m.Update(jobsPayload)
+	m = modelAny.(Model)
+	counts := m.jobCounts()
+	if counts["ready"] != 2 {
+		t.Fatalf("expected unfiltered ready count 2, got %d", counts["ready"])
+	}
+	if counts["queued"] != 2 {
+		t.Fatalf("expected unfiltered queued count 2, got %d", counts["queued"])
+	}
+}
+
 func TestJobsMsgClampsCursorWhenListShrinks(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()
@@ -544,7 +1002,7 @@ func TestJobsMsgClampsCursorWhenListShrinks(t *testing.T) {
 	m.pageSize = 10
 	m.page = 2
 	m.cursor = 25
-	modelAny, _ := m.Update(jobsMsg(makeTestJobs(31)))
+	modelAny, _ := m.Update(jobsMsg{filtered: makeTestJobs(31), unfiltered: makeTestJobs(31)})
 	m = modelAny.(Model)
 	if m.page != 2 {
 		t.Fatalf("expected page to stay 2, got %d", m.page)
@@ -553,7 +1011,7 @@ func TestJobsMsgClampsCursorWhenListShrinks(t *testing.T) {
 		t.Fatalf("expected cursor to stay 25, got %d", m.cursor)
 	}
 
-	modelAny, _ = m.Update(jobsMsg(makeTestJobs(12)))
+	modelAny, _ = m.Update(jobsMsg{filtered: makeTestJobs(12), unfiltered: makeTestJobs(12)})
 	m = modelAny.(Model)
 	if m.page != 1 {
 		t.Fatalf("expected page to clamp to 1, got %d", m.page)
@@ -564,7 +1022,7 @@ func TestJobsMsgClampsCursorWhenListShrinks(t *testing.T) {
 
 	m.page = 0
 	m.cursor = 2
-	modelAny, _ = m.Update(jobsMsg(nil))
+	modelAny, _ = m.Update(jobsMsg{filtered: nil})
 	m = modelAny.(Model)
 	if m.page != 0 {
 		t.Fatalf("expected page to reset to 0 for empty jobs list, got %d", m.page)
@@ -625,10 +1083,10 @@ func TestHandleKeyLevel1PaginationControls(t *testing.T) {
 		t.Fatalf("expected page clamp at 2 after extra pgdown; got page %d cursor %d", m.page, m.cursor)
 	}
 
-	modelAny, _ = m.handleKey(keyRunes('p'))
+	modelAny, _ = m.handleKey(keyType(tea.KeyPgUp))
 	m = modelAny.(Model)
 	if m.page != 1 || m.cursor != 10 {
-		t.Fatalf("expected page 1, cursor 10 after p; got page %d cursor %d", m.page, m.cursor)
+		t.Fatalf("expected page 1, cursor 10 after pgup; got page %d cursor %d", m.page, m.cursor)
 	}
 
 	modelAny, _ = m.handleKey(keyType(tea.KeyPgUp))
@@ -770,7 +1228,7 @@ func TestSelectedSyncsAfterJobsMsg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list jobs: %v", err)
 	}
-	modelAny, _ := m.Update(jobsMsg(jobs))
+	modelAny, _ := m.Update(jobsMsg{filtered: jobs, unfiltered: jobs})
 	m = modelAny.(Model)
 
 	if m.selected == nil {
@@ -816,7 +1274,7 @@ func TestApproveSuccessKeepsDetailViewAndRefreshesJobsSessionsSummary(t *testing
 	updated := make([]db.Job, len(m.jobs))
 	copy(updated, m.jobs)
 	updated[0].State = "approved"
-	modelAny, _ = m.Update(jobsMsg(updated))
+	modelAny, _ = m.Update(jobsMsg{filtered: updated, unfiltered: updated})
 	m = modelAny.(Model)
 	if m.selected == nil || m.selected.State != "approved" {
 		t.Fatalf("expected selected state to update to approved after jobs refresh")

@@ -1863,6 +1863,130 @@ func TestListReadyOrApprovedJobsWithBranchNoPR(t *testing.T) {
 	}
 }
 
+func TestListJobsSupportsProjectFilterAndActiveState(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	planAlpha := createTestJobWithStateAndProject(t, ctx, store, "plan-1", "planning", "alpha")
+	implAlpha := createTestJobWithStateAndProject(t, ctx, store, "impl-1", "implementing", "alpha")
+	testBeta := createTestJobWithStateAndProject(t, ctx, store, "test-1", "testing", "beta")
+	reviewBeta := createTestJobWithStateAndProject(t, ctx, store, "review-1", "reviewing", "beta")
+	_ = createTestJobWithStateAndProject(t, ctx, store, "ready-1", "ready", "alpha")
+	_ = createTestJobWithStateAndProject(t, ctx, store, "other-1", "ready", "beta")
+	mergedAlpha := createTestJobWithStateAndProject(t, ctx, store, "merged-1", "approved", "alpha")
+	if _, err := store.Writer.ExecContext(ctx, `
+UPDATE jobs
+SET pr_merged_at = ?
+WHERE id = ?`, "2026-02-18T00:00:00Z", mergedAlpha); err != nil {
+		t.Fatalf("set merged metadata: %v", err)
+	}
+
+	active, err := store.ListJobs(ctx, "", "active", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list active jobs: %v", err)
+	}
+	if len(active) != 4 {
+		t.Fatalf("expected 4 active jobs, got %d", len(active))
+	}
+	foundActive := map[string]bool{}
+	for _, j := range active {
+		foundActive[j.ID] = true
+	}
+	for _, want := range []string{planAlpha, implAlpha, testBeta, reviewBeta} {
+		if !foundActive[want] {
+			t.Fatalf("expected active filter to include job %q", want)
+		}
+	}
+	for _, want := range []string{"ready-1", "other-1"} {
+		if foundActive[want] {
+			t.Fatalf("ready jobs should not be in active filter: %q", want)
+		}
+	}
+
+	alphaActive, err := store.ListJobs(ctx, "alpha", "active", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list active alpha jobs: %v", err)
+	}
+	if len(alphaActive) != 2 {
+		t.Fatalf("expected 2 active alpha jobs, got %d", len(alphaActive))
+	}
+	foundAlpha := map[string]bool{}
+	for _, j := range alphaActive {
+		if j.ProjectName != "alpha" {
+			t.Fatalf("expected alpha-only active job, got %q", j.ProjectName)
+		}
+		foundAlpha[j.State] = true
+	}
+	for _, want := range []string{"planning", "implementing"} {
+		if !foundAlpha[want] {
+			t.Fatalf("expected alpha active to include %q state", want)
+		}
+	}
+
+	merged, err := store.ListJobs(ctx, "", "merged", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list merged jobs: %v", err)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected 1 merged job, got %d", len(merged))
+	}
+	if merged[0].State != "approved" || merged[0].PRMergedAt != "2026-02-18T00:00:00Z" {
+		t.Fatalf("unexpected merged job record: state=%q mergedAt=%q", merged[0].State, merged[0].PRMergedAt)
+	}
+
+	alphaMerged, err := store.ListJobs(ctx, "alpha", "merged", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list merged alpha jobs: %v", err)
+	}
+	if len(alphaMerged) != 1 {
+		t.Fatalf("expected 1 alpha merged job, got %d", len(alphaMerged))
+	}
+	if alphaMerged[0].ID != mergedAlpha {
+		t.Fatalf("expected merged alpha job id %q, got %q", mergedAlpha, alphaMerged[0].ID)
+	}
+
+	all, err := store.ListJobs(ctx, "beta", "all", "updated_at", false)
+	if err != nil {
+		t.Fatalf("list beta jobs: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 beta jobs, got %d", len(all))
+	}
+}
+
+func createTestJobWithStateAndProject(t *testing.T, ctx context.Context, store *Store, sourceIssueID, state, project string) string {
+	t.Helper()
+	issueID, err := store.UpsertIssue(ctx, IssueUpsert{
+		ProjectName:   project,
+		Source:        "github",
+		SourceIssueID: sourceIssueID,
+		Title:         sourceIssueID,
+		URL:           "https://github.com/org/repo/issues/" + sourceIssueID,
+		State:         "open",
+	})
+	if err != nil {
+		t.Fatalf("upsert issue %s: %v", sourceIssueID, err)
+	}
+	jobID, err := store.CreateJob(ctx, issueID, project, 3)
+	if err != nil {
+		t.Fatalf("create job %s: %v", sourceIssueID, err)
+	}
+	if _, err := store.Writer.ExecContext(ctx, `
+		UPDATE jobs
+		SET state = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+		WHERE id = ?`, state, jobID); err != nil {
+		t.Fatalf("configure job %s: %v", sourceIssueID, err)
+	}
+	return jobID
+}
+
 func TestEnsureJobApproved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

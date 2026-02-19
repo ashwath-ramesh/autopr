@@ -290,8 +290,20 @@ WHERE 1=1`
 		args = append(args, project)
 	}
 	if state != "" && state != "all" {
-		q += ` AND j.state = ?`
-		args = append(args, state)
+		switch state {
+		case "active":
+			states := []string{"planning", "implementing", "reviewing", "testing"}
+			q += " AND j.state IN (" + strings.Repeat("?,", len(states)-1) + "?)"
+			for _, s := range states {
+				args = append(args, s)
+			}
+		case "merged":
+			q += " AND j.state = ? AND COALESCE(j.pr_merged_at,'') != ''"
+			args = append(args, "approved")
+		default:
+			q += ` AND j.state = ?`
+			args = append(args, state)
+		}
 	}
 	orderExpr := resolveJobOrderExpression(orderBy)
 	direction := "DESC"

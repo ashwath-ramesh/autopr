@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -61,6 +62,23 @@ var (
 	inactiveTab   = dimStyle
 )
 
+const (
+	filterAllState   = "all"
+	filterAllProject = "all"
+)
+
+var filterStateCycle = []string{
+	filterAllState,
+	"queued",
+	"active",
+	"ready",
+	"failed",
+	"merged",
+	"rejected",
+	"cancelled",
+	filterAllState,
+}
+
 // ── Model ───────────────────────────────────────────────────────────────────
 
 // Model is the BubbleTea model for the AutoPR TUI.
@@ -76,14 +94,23 @@ type Model struct {
 	cfg   *config.Config
 
 	// Level 1: job list
-	jobs          []db.Job
-	issueSummary  db.IssueSyncSummary
-	cursor        int
-	sortColumn    string
-	sortAsc       bool
-	page          int
-	pageSize      int
-	daemonRunning bool
+	jobs                []db.Job
+	allJobsCounts       []db.Job
+	issueSummary        db.IssueSyncSummary
+	cursor              int
+	sortColumn          string
+	sortAsc             bool
+	page                int
+	pageSize            int
+	daemonRunning       bool
+	filterState         string
+	filterProject       string
+	filterMode          bool
+	filterStateDraft    string
+	filterProjectDraft  string
+	filterStateBefore   string
+	filterProjectBefore string
+	filterCursorBefore  int
 
 	// Level 2: job detail + session list
 	selected     *db.Job
@@ -119,6 +146,8 @@ func NewModel(store *db.Store, cfg *config.Config) Model {
 		cfg:           cfg,
 		sortColumn:    "updated_at",
 		sortAsc:       false,
+		filterState:   filterAllState,
+		filterProject: filterAllProject,
 		daemonRunning: isDaemonRunning(cfg.Daemon.PIDFile),
 		page:          0,
 		pageSize:      1,
@@ -127,7 +156,10 @@ func NewModel(store *db.Store, cfg *config.Config) Model {
 
 // ── Messages ────────────────────────────────────────────────────────────────
 
-type jobsMsg []db.Job
+type jobsMsg struct {
+	filtered   []db.Job
+	unfiltered []db.Job
+}
 type issueSummaryMsg db.IssueSyncSummary
 type sessionsMsg struct {
 	jobID        string
@@ -170,11 +202,32 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) fetchJobs() tea.Msg {
-	jobs, err := m.store.ListJobs(context.Background(), "", "all", m.sortColumn, m.sortAsc)
+	projectFilter := m.filterProject
+	if projectFilter == filterAllProject {
+		projectFilter = ""
+	}
+	stateFilter := m.filterState
+	if stateFilter == "" {
+		stateFilter = filterAllState
+	}
+
+	filtered, err := m.store.ListJobs(context.Background(), projectFilter, stateFilter, m.sortColumn, m.sortAsc)
 	if err != nil {
 		return errMsg(err)
 	}
-	return jobsMsg(jobs)
+
+	unfiltered := filtered
+	if m.filterProject != filterAllProject || m.filterState != filterAllState {
+		unfiltered, err = m.store.ListJobs(context.Background(), "", filterAllState, m.sortColumn, m.sortAsc)
+		if err != nil {
+			return errMsg(err)
+		}
+	}
+
+	return jobsMsg{
+		filtered:   filtered,
+		unfiltered: unfiltered,
+	}
 }
 
 func (m Model) fetchIssueSummary() tea.Msg {
@@ -445,7 +498,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case jobsMsg:
-		m.jobs = msg
+		m.jobs = msg.filtered
+		m.allJobsCounts = msg.unfiltered
 		m.page, m.cursor = clampPageAndCursor(len(m.jobs), m.page, m.cursor, m.pageSize)
 		m.err = nil
 		// Re-sync selected pointer to new slice so keybindings see fresh state.
@@ -600,6 +654,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.showDiff {
 		return m.handleKeyDiff(key)
 	}
+
+	if m.filterMode {
+		return m.handleKeyFilterMode(key)
+	}
+
 	if m.selectedSession != nil {
 		return m.handleKeyLevel3(key)
 	}
@@ -639,7 +698,7 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		m.page, _ = clampPageAndCursor(totalJobs, targetPage, pageStart(targetPage, pageSize), pageSize)
 		m.cursor = pageStart(m.page, pageSize)
 		return m, nil
-	case "p", "pgup", "pageup":
+	case "pgup", "pageup":
 		targetPage--
 		m.page, _ = clampPageAndCursor(totalJobs, targetPage, pageStart(targetPage, pageSize), pageSize)
 		m.cursor = pageStart(m.page, pageSize)
@@ -656,6 +715,35 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		m.page, _ = clampPageAndCursor(totalJobs, last, pageStart(last, pageSize), pageSize)
 		m.cursor = pageStart(m.page, pageSize)
 		return m, nil
+	case "f":
+		m.filterMode = true
+		m.filterStateBefore = m.filterState
+		m.filterProjectBefore = m.filterProject
+		m.filterStateDraft = m.filterState
+		m.filterProjectDraft = m.filterProject
+		m.filterCursorBefore = m.cursor
+	case "F":
+		m.filterState = filterAllState
+		m.filterProject = filterAllProject
+		m.filterStateDraft = filterAllState
+		m.filterProjectDraft = filterAllProject
+		m.cursor = 0
+		return m.commitFilterDrafts()
+	case "esc":
+		if m.filterMode {
+			m.filterMode = false
+			m.filterState = m.filterStateBefore
+			m.filterProject = m.filterProjectBefore
+			m.filterStateDraft = m.filterState
+			m.filterProjectDraft = m.filterProject
+			m.cursor = m.filterCursorBefore
+			if len(m.jobs) == 0 {
+				m.cursor = 0
+			} else if m.cursor >= len(m.jobs) {
+				m.cursor = len(m.jobs) - 1
+			}
+			return m, m.fetchJobs
+		}
 	case "up", "k":
 		m.page, m.cursor = clampPageAndCursor(totalJobs, m.page, m.cursor, pageSize)
 		start := pageStart(m.page, pageSize)
@@ -703,6 +791,94 @@ func (m Model) handleKeyLevel1(key string) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchJobs, m.fetchIssueSummary)
 	}
 	return m, nil
+}
+
+func (m Model) handleKeyFilterMode(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "s":
+		m.filterStateDraft = m.nextFilterState(m.filterStateDraft)
+		return m.commitFilterDrafts()
+	case "p":
+		m.filterProjectDraft = m.nextFilterProject(m.filterProjectDraft)
+		return m.commitFilterDrafts()
+	case "F":
+		m.filterStateDraft = filterAllState
+		m.filterProjectDraft = filterAllProject
+		m.filterState = m.filterStateDraft
+		m.filterProject = m.filterProjectDraft
+		m.cursor = 0
+		return m.commitFilterDrafts()
+	case "esc":
+		m.filterMode = false
+		m.filterState = m.filterStateBefore
+		m.filterProject = m.filterProjectBefore
+		m.filterStateDraft = m.filterState
+		m.filterProjectDraft = m.filterProject
+		m.cursor = m.filterCursorBefore
+		if len(m.jobs) == 0 {
+			m.cursor = 0
+		} else if m.cursor >= len(m.jobs) {
+			m.cursor = len(m.jobs) - 1
+		}
+		return m, m.fetchJobs
+	case "f":
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) commitFilterDrafts() (tea.Model, tea.Cmd) {
+	changed := m.filterState != m.filterStateDraft || m.filterProject != m.filterProjectDraft
+	m.filterState = m.filterStateDraft
+	m.filterProject = m.filterProjectDraft
+	if changed {
+		m.cursor = 0
+	}
+	return m, tea.Batch(m.fetchJobs, m.fetchIssueSummary)
+}
+
+func (m Model) nextFilterState(current string) string {
+	if len(filterStateCycle) == 0 {
+		return current
+	}
+	for i := range filterStateCycle {
+		if filterStateCycle[i] == current {
+			return filterStateCycle[(i+1)%len(filterStateCycle)]
+		}
+	}
+	return filterStateCycle[0]
+}
+
+func (m Model) nextFilterProject(current string) string {
+	options := m.projectFilterOptions()
+	if len(options) == 0 {
+		return filterAllProject
+	}
+	next := append([]string{filterAllProject}, options...)
+	next = append(next, filterAllProject)
+	for i := range next {
+		if next[i] == current {
+			return next[(i+1)%len(next)]
+		}
+	}
+	return next[0]
+}
+
+func (m Model) projectFilterOptions() []string {
+	seen := map[string]struct{}{}
+	for _, job := range m.jobs {
+		if _, ok := seen[job.ProjectName]; ok {
+			continue
+		}
+		seen[job.ProjectName] = struct{}{}
+	}
+
+	options := make([]string, 0, len(seen))
+	for project := range seen {
+		options = append(options, project)
+	}
+	sort.Strings(options)
+	return options
 }
 
 func (m Model) handleKeyLevel2(key string) (tea.Model, tea.Cmd) {
@@ -1034,6 +1210,10 @@ func (m Model) listView() string {
 		stateStyle["failed"].Render("failed"), counts["failed"],
 		stateStyle["cancelled"].Render("cancelled"), counts["cancelled"],
 	))
+	if m.filterState != filterAllState || m.filterProject != filterAllProject {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  Filter: state=%s  project=%s\n",
+			m.filterState, m.filterProject)))
+	}
 	b.WriteString(fmt.Sprintf("  Issues: %d synced, %d eligible, %d skipped\n",
 		m.issueSummary.Synced, m.issueSummary.Eligible, m.issueSummary.Skipped))
 	if m.actionWarn != "" {
@@ -1145,11 +1325,14 @@ func (m Model) listView() string {
 		pageLabel = 0
 		pageNum = 0
 	}
-	hints := []string{fmt.Sprintf("Page %d/%d (%d jobs)", pageNum, pageLabel, len(m.jobs)), "j/k navigate", "enter details"}
+	hints := []string{fmt.Sprintf("Page %d/%d (%d jobs)", pageNum, pageLabel, len(m.jobs)), "j/k navigate", "enter details", "f filter"}
 	if m.cursor < len(m.jobs) && db.IsCancellableState(m.jobs[m.cursor].State) {
 		hints = append(hints, "c cancel")
 	}
-	hints = append(hints, "s sort", "S toggle sort dir")
+	hints = append(hints, "F clear filters", "s sort", "S toggle sort dir")
+	if m.filterMode {
+		hints = append(hints, "s state", "p project", "esc cancel filter")
+	}
 	hints = append(hints, "r refresh", "q quit")
 	b.WriteString(dimStyle.Render(strings.Join(hints, "  ")))
 	return b.String()
@@ -1699,8 +1882,13 @@ func (m Model) confirmPrompt() string {
 }
 
 func (m Model) jobCounts() map[string]int {
+	jobs := m.allJobsCounts
+	if jobs == nil {
+		jobs = m.jobs
+	}
+
 	counts := make(map[string]int)
-	for _, j := range m.jobs {
+	for _, j := range jobs {
 		counts[j.State]++
 	}
 	return counts
