@@ -10,6 +10,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
+type statusJobCounts struct {
+	Queued       int `json:"queued"`
+	Planning     int `json:"planning"`
+	Implementing int `json:"implementing"`
+	Reviewing    int `json:"reviewing"`
+	Testing      int `json:"testing"`
+	NeedsPR      int `json:"needs_pr"`
+	Failed       int `json:"failed"`
+	Cancelled    int `json:"cancelled"`
+	Rejected     int `json:"rejected"`
+	PRCreated    int `json:"pr_created"`
+	Merged       int `json:"merged"`
+}
+
+type statusOutput struct {
+	Running   bool            `json:"running"`
+	PID       string          `json:"pid"`
+	JobCounts statusJobCounts `json:"job_counts"`
+}
+
 var statusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show daemon status and queue depth",
@@ -59,7 +79,18 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	}
 	defer rows.Close()
 
-	counts := map[string]int{}
+	counts := map[string]int{
+		"queued":       0,
+		"planning":     0,
+		"implementing": 0,
+		"reviewing":    0,
+		"testing":      0,
+		"ready":        0,
+		"approved":     0,
+		"failed":       0,
+		"cancelled":    0,
+		"rejected":     0,
+	}
 	for rows.Next() {
 		var sc stateCount
 		if err := rows.Scan(&sc.State, &sc.Count); err != nil {
@@ -68,11 +99,33 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		counts[sc.State] = sc.Count
 	}
 
+	// Count merged separately (approved jobs with pr_merged_at set).
+	var merged int
+	_ = store.Reader.QueryRowContext(cmd.Context(),
+		`SELECT COUNT(*) FROM jobs WHERE state = 'approved' AND pr_merged_at IS NOT NULL AND pr_merged_at != ''`).Scan(&merged)
+	prCreated := counts["approved"] - merged
+	if prCreated < 0 {
+		prCreated = 0
+	}
+	jobCounts := statusJobCounts{
+		Queued:       counts["queued"],
+		Planning:     counts["planning"],
+		Implementing: counts["implementing"],
+		Reviewing:    counts["reviewing"],
+		Testing:      counts["testing"],
+		NeedsPR:      counts["ready"],
+		Failed:       counts["failed"],
+		Cancelled:    counts["cancelled"],
+		Rejected:     counts["rejected"],
+		PRCreated:    prCreated,
+		Merged:       merged,
+	}
+
 	if jsonOut {
-		printJSON(map[string]any{
-			"running":    running,
-			"pid":        pidStr,
-			"job_counts": counts,
+		printJSON(statusOutput{
+			Running:   running,
+			PID:       pidStr,
+			JobCounts: jobCounts,
 		})
 		return nil
 	}
@@ -82,12 +135,6 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	} else {
 		fmt.Println("Daemon: stopped")
 	}
-	// Count merged separately (approved jobs with pr_merged_at set).
-	var merged int
-	_ = store.Reader.QueryRowContext(cmd.Context(),
-		`SELECT COUNT(*) FROM jobs WHERE state = 'approved' AND pr_merged_at IS NOT NULL AND pr_merged_at != ''`).Scan(&merged)
-	prCreated := counts["approved"] - merged
-
 	fmt.Printf("Jobs: queued=%d planning=%d implementing=%d reviewing=%d testing=%d needs_pr=%d failed=%d cancelled=%d pr_created=%d merged=%d rejected=%d\n",
 		counts["queued"], counts["planning"], counts["implementing"], counts["reviewing"],
 		counts["testing"], counts["ready"], counts["failed"], counts["cancelled"], prCreated, merged, counts["rejected"])
