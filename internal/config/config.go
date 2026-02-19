@@ -148,8 +148,9 @@ type ProjectConfig struct {
 }
 
 type ProjectGitLab struct {
-	BaseURL   string `toml:"base_url"`
-	ProjectID string `toml:"project_id"`
+	BaseURL       string   `toml:"base_url"`
+	ProjectID     string   `toml:"project_id"`
+	IncludeLabels []string `toml:"include_labels"`
 }
 
 type ProjectGitHub struct {
@@ -356,6 +357,13 @@ func validate(cfg *Config) error {
 				return fmt.Errorf("project %q github.include_labels: %w", p.Name, err)
 			}
 			cfg.Projects[i].GitHub.IncludeLabels = normalized
+		}
+		if p.GitLab != nil {
+			normalized, err := normalizeLabels(p.GitLab.IncludeLabels)
+			if err != nil {
+				return fmt.Errorf("project %q gitlab.include_labels: %w", p.Name, err)
+			}
+			cfg.Projects[i].GitLab.IncludeLabels = normalized
 		}
 	}
 	return nil

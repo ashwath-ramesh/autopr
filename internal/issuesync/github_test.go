@@ -45,7 +45,7 @@ func TestEvaluateGitHubIssueEligibility(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := evaluateGitHubIssueEligibility(tc.includeLabels, tc.issueLabels, now)
+			got := evaluateIssueEligibility(tc.includeLabels, tc.issueLabels, now)
 			if got.Eligible != tc.wantEligible {
 				t.Fatalf("eligible: want %v got %v", tc.wantEligible, got.Eligible)
 			}

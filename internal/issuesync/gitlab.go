@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"autopr/internal/config"
 	"autopr/internal/db"
@@ -86,33 +87,8 @@ func (s *Syncer) syncGitLab(ctx context.Context, p *config.ProjectConfig) error 
 			break
 		}
 
-		for _, issue := range issues {
-			// Skip issues created by autopr (contain our marker).
-			if containsMarker(issue.Description) {
-				continue
-			}
-
-			labels := make([]string, 0, len(issue.Labels))
-			labels = append(labels, issue.Labels...)
-
-			ffid, err := s.store.UpsertIssue(ctx, db.IssueUpsert{
-				ProjectName:   p.Name,
-				Source:        "gitlab",
-				SourceIssueID: fmt.Sprintf("%d", issue.IID),
-				Title:         issue.Title,
-				Body:          issue.Description,
-				URL:           issue.WebURL,
-				State:         "open",
-				Labels:        labels,
-				SourceUpdated: issue.UpdatedAt,
-			})
-			if err != nil {
-				slog.Error("sync: upsert gitlab issue", "iid", issue.IID, "err", err)
-				continue
-			}
-
-			s.createJobIfNeeded(ctx, ffid, p.Name)
-			latestUpdated = issue.UpdatedAt
+		if lu := s.syncGitLabPage(ctx, p, issues); lu != "" {
+			latestUpdated = lu
 		}
 
 		nextPage = strings.TrimSpace(xNextPage)
@@ -129,6 +105,58 @@ func (s *Syncer) syncGitLab(ctx context.Context, p *config.ProjectConfig) error 
 	}
 
 	return nil
+}
+
+func (s *Syncer) syncGitLabPage(ctx context.Context, p *config.ProjectConfig, issues []gitlabIssue) string {
+	var includeLabels []string
+	if p.GitLab != nil {
+		includeLabels = p.GitLab.IncludeLabels
+	}
+
+	var latestUpdated string
+	for _, issue := range issues {
+		// Skip issues created by autopr (contain our marker).
+		if containsMarker(issue.Description) {
+			continue
+		}
+
+		labels := make([]string, 0, len(issue.Labels))
+		labels = append(labels, issue.Labels...)
+
+		eligibility := evaluateIssueEligibility(includeLabels, labels, time.Now().UTC())
+		eligible := eligibility.Eligible
+
+		ffid, err := s.store.UpsertIssue(ctx, db.IssueUpsert{
+			ProjectName:   p.Name,
+			Source:        "gitlab",
+			SourceIssueID: fmt.Sprintf("%d", issue.IID),
+			Title:         issue.Title,
+			Body:          issue.Description,
+			URL:           issue.WebURL,
+			State:         "open",
+			Labels:        labels,
+			Eligible:      &eligible,
+			SkipReason:    eligibility.SkipReason,
+			EvaluatedAt:   eligibility.EvaluatedAt,
+			SourceUpdated: issue.UpdatedAt,
+		})
+		if err != nil {
+			slog.Error("sync: upsert gitlab issue", "iid", issue.IID, "err", err)
+			continue
+		}
+
+		if eligibility.Eligible {
+			s.createJobIfNeeded(ctx, ffid, p.Name)
+		} else {
+			slog.Info("sync: gitlab issue skipped by label gate",
+				"project", p.Name,
+				"iid", issue.IID,
+				"skip_reason", eligibility.SkipReason)
+		}
+		latestUpdated = issue.UpdatedAt
+	}
+
+	return latestUpdated
 }
 
 type gitlabIssue struct {

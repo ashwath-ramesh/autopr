@@ -202,6 +202,17 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check label eligibility.
+	if projectCfg.GitLab != nil && len(projectCfg.GitLab.IncludeLabels) > 0 {
+		if !hasMatchingLabel(projectCfg.GitLab.IncludeLabels, event.Labels()) {
+			slog.Info("webhook: issue skipped by label gate",
+				"project", projectCfg.Name,
+				"iid", event.ObjectAttributes.IID)
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+	}
+
 	// Check for existing active job.
 	active, err := s.store.HasActiveJobForIssue(ctx, ffid)
 	if err != nil {
@@ -252,6 +263,21 @@ func (s *Server) findProject(event gitlabIssueEvent) *config.ProjectConfig {
 
 func containsAPMarker(desc string) bool {
 	return strings.Contains(desc, "ap-id:") || strings.Contains(desc, "ap-sentry-issue:")
+}
+
+// hasMatchingLabel returns true if at least one of the issue labels matches
+// any of the required labels (case-insensitive).
+func hasMatchingLabel(required, issueLabels []string) bool {
+	issueSet := make(map[string]struct{}, len(issueLabels))
+	for _, l := range issueLabels {
+		issueSet[strings.ToLower(strings.TrimSpace(l))] = struct{}{}
+	}
+	for _, r := range required {
+		if _, ok := issueSet[strings.ToLower(strings.TrimSpace(r))]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // GitLab webhook payload types.

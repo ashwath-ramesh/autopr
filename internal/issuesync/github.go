@@ -132,7 +132,7 @@ func (s *Syncer) syncGitHubIssues(ctx context.Context, p *config.ProjectConfig, 
 			labels = append(labels, l.Name)
 		}
 
-		eligibility := evaluateGitHubIssueEligibility(includeLabels, labels, time.Now().UTC())
+		eligibility := evaluateIssueEligibility(includeLabels, labels, time.Now().UTC())
 		eligible := eligibility.Eligible
 		state := "open"
 		if issue.State == "closed" {
