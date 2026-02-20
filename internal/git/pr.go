@@ -255,13 +255,13 @@ func MergeGitHubPR(ctx context.Context, token, prURL, method string) error {
 
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/merge", owner, repo, prNumber)
 	payload := map[string]any{"merge_method": method}
-	body, err := json.Marshal(payload)
+	payloadBody, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal github merge payload: %w", err)
 	}
 
 	resp, err := httputil.Do(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, apiURL, strings.NewReader(string(body)))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, apiURL, strings.NewReader(string(payloadBody)))
 		if err != nil {
 			return nil, err
 		}
@@ -275,20 +275,20 @@ func MergeGitHubPR(ctx context.Context, token, prURL, method string) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
 		return nil
 	case http.StatusConflict, http.StatusMethodNotAllowed, http.StatusUnprocessableEntity:
-		msg := string(body)
+		msg := string(respBody)
 		if len(msg) > 4096 {
 			msg = msg[:4096]
 		}
 		return fmt.Errorf("PR is not mergeable: HTTP %d: %s", resp.StatusCode, msg)
 	}
 
-	msg := string(body)
+	msg := string(respBody)
 	if len(msg) > 4096 {
 		msg = msg[:4096]
 	}
@@ -316,13 +316,13 @@ func MergeGitLabMR(ctx context.Context, token, baseURL, mrURL string, squash boo
 
 	apiURL := fmt.Sprintf("%s/api/v4/projects/%s/merge_requests/%s/merge", baseURL, projectPath, mrNumber)
 	payload := map[string]any{"squash": squash}
-	body, err := json.Marshal(payload)
+	payloadBody, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal gitlab merge payload: %w", err)
 	}
 
 	resp, err := httputil.Do(ctx, func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPut, apiURL, strings.NewReader(string(body)))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPut, apiURL, strings.NewReader(string(payloadBody)))
 		if err != nil {
 			return nil, err
 		}
@@ -335,20 +335,20 @@ func MergeGitLabMR(ctx context.Context, token, baseURL, mrURL string, squash boo
 	}
 	defer resp.Body.Close()
 
-	body, _ = io.ReadAll(resp.Body)
+	respBody, _ := io.ReadAll(resp.Body)
 
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
 		return nil
 	case http.StatusConflict, http.StatusMethodNotAllowed, http.StatusUnprocessableEntity:
-		msg := string(body)
+		msg := string(respBody)
 		if len(msg) > 4096 {
 			msg = msg[:4096]
 		}
 		return fmt.Errorf("MR is not mergeable: HTTP %d: %s", resp.StatusCode, msg)
 	}
 
-	msg := string(body)
+	msg := string(respBody)
 	if len(msg) > 4096 {
 		msg = msg[:4096]
 	}
