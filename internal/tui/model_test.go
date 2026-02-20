@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,8 @@ import (
 	"autopr/internal/db"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 func TestFilterGhostSessions(t *testing.T) {
@@ -38,6 +41,15 @@ func TestFilterGhostSessions(t *testing.T) {
 	}
 	if filtered[2].ID != 4 {
 		t.Fatalf("expected non-ghost running session id=4 to be kept, got id=%d", filtered[2].ID)
+	}
+}
+
+func TestSelectedStyleRendersBackgroundInANSI256(t *testing.T) {
+	renderer := lipgloss.NewRenderer(io.Discard)
+	renderer.SetColorProfile(termenv.ANSI256)
+	rendered := selectedStyle.Renderer(renderer).Render("selected row")
+	if !strings.Contains(rendered, "48;5;236") {
+		t.Fatalf("expected selectedStyle to render ANSI256 background 236, got: %q", rendered)
 	}
 }
 

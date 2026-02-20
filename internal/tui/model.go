@@ -31,7 +31,7 @@ var (
 	frameStyle    = lipgloss.NewStyle().Padding(1, pad)
 	titleStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46"))
 	headerStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("37"))
-	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46"))
+	selectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Background(lipgloss.Color("236"))
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
 	labelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
 	dotRunning    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("46")).Render("●")
