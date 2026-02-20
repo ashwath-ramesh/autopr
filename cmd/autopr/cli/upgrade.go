@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
+	"autopr/internal/config"
 	"autopr/internal/update"
 
 	"github.com/spf13/cobra"
@@ -30,7 +32,20 @@ func init() {
 }
 
 func runUpgrade(cmd *cobra.Command, args []string) error {
-	return runUpgradeWith(cmd.Context(), os.Stdout, update.NewManager(version), version, upgradeCheckOnly)
+	err := runUpgradeWith(cmd.Context(), os.Stdout, update.NewManager(version), version, upgradeCheckOnly)
+	if err != nil {
+		return err
+	}
+
+	// Best-effort config migration after a successful upgrade.
+	if !upgradeCheckOnly {
+		if path, pathErr := resolveConfigPath(); pathErr == nil {
+			if migErr := config.MigrateConfigFile(path); migErr != nil {
+				slog.Warn("post-upgrade config migration skipped", "err", migErr)
+			}
+		}
+	}
+	return nil
 }
 
 func runUpgradeWith(ctx context.Context, out io.Writer, svc upgradeService, currentVersion string, checkOnly bool) error {

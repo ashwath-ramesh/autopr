@@ -45,12 +45,8 @@ func runReject(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("job %s is in state %q, must be 'ready' to reject", jobID, job.State)
 	}
 
-	if err := store.TransitionState(cmd.Context(), jobID, "ready", "rejected"); err != nil {
+	if err := store.RejectJob(cmd.Context(), jobID, "ready", rejectReason); err != nil {
 		return err
-	}
-
-	if rejectReason != "" {
-		_ = store.UpdateJobField(cmd.Context(), jobID, "reject_reason", rejectReason)
 	}
 
 	if jsonOut {

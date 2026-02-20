@@ -213,6 +213,8 @@ const configTemplate = `# AutoPR configuration
 # State files (logs, PID) default to ~/.local/state/autopr/
 # Override with XDG_DATA_HOME / XDG_STATE_HOME or set paths explicitly below.
 
+config_version = 1
+
 log_level = "info"              # debug|info|warn|error
 
 [daemon]
@@ -222,6 +224,8 @@ max_workers = 3
 max_iterations = 3              # implement<->review loop default
 sync_interval = "5m"            # GitHub/Sentry poll interval
 auto_pr = false                 # set true to auto-create PRs after tests pass
+ci_check_interval = "30s"       # how often to poll CI check-runs
+ci_check_timeout = "30m"        # max wait for CI checks before rejecting
 
 # [sentry]
 # base_url = "https://sentry.io"  # uncomment for self-hosted Sentry

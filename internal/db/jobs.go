@@ -51,7 +51,9 @@ var ValidTransitions = func() map[string][]string {
 
 	// completion phase
 	// ready: implementation appears complete and awaits approval decision.
-	registerTransition(transitions, "ready", "approved", "rejected")
+	registerTransition(transitions, "ready", "awaiting_checks", "approved", "rejected")
+	// awaiting_checks: PR created, waiting for CI check-runs to pass.
+	registerTransition(transitions, "awaiting_checks", "approved", "rejected", "cancelled")
 	// failed: implementation failed and can be retried by returning to queue.
 	registerTransition(transitions, "failed", "queued")
 	// rejected: review outcome was not accepted; can be retried by returning to queue.
@@ -65,7 +67,7 @@ var ValidTransitions = func() map[string][]string {
 // IsCancellableState reports whether a job can be cancelled.
 func IsCancellableState(state string) bool {
 	switch state {
-	case "queued", "planning", "implementing", "reviewing", "testing", "rebasing", "resolving_conflicts":
+	case "queued", "planning", "implementing", "reviewing", "testing", "rebasing", "resolving_conflicts", "awaiting_checks":
 		return true
 	default:
 		return false
@@ -87,6 +89,8 @@ func StepForState(state string) string {
 		return ""
 	case "resolving_conflicts":
 		return "conflict_resolution"
+	case "awaiting_checks":
+		return ""
 	default:
 		return ""
 	}
@@ -107,6 +111,8 @@ func DisplayState(state, prMergedAt, prClosedAt string) string {
 		return "rebasing"
 	case "resolving_conflicts":
 		return "resolving"
+	case "awaiting_checks":
+		return "checking ci"
 	case "approved":
 		return "pr created"
 	default:
@@ -245,13 +251,25 @@ func (s *Store) TransitionState(ctx context.Context, jobID, from, to string) err
 		eventType = NotificationEventNeedsPR
 	case "failed":
 		eventType = NotificationEventFailed
-	case "approved":
+	case "awaiting_checks":
 		var prURL string
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(pr_url, '') FROM jobs WHERE id = ?`, jobID).Scan(&prURL); err != nil {
 			return fmt.Errorf("transition job %s %s->%s: load pr_url: %w", jobID, from, to, err)
 		}
 		if strings.TrimSpace(prURL) != "" {
 			eventType = NotificationEventPRCreated
+		}
+	case "approved":
+		// Only fire pr_created when arriving from a state that hasn't already
+		// sent it (awaiting_checks already emits pr_created on entry).
+		if from != "awaiting_checks" {
+			var prURL string
+			if err := tx.QueryRowContext(ctx, `SELECT COALESCE(pr_url, '') FROM jobs WHERE id = ?`, jobID).Scan(&prURL); err != nil {
+				return fmt.Errorf("transition job %s %s->%s: load pr_url: %w", jobID, from, to, err)
+			}
+			if strings.TrimSpace(prURL) != "" {
+				eventType = NotificationEventPRCreated
+			}
 		}
 	}
 	if err := enqueueNotificationEventTx(ctx, tx, jobID, eventType); err != nil {
@@ -260,6 +278,39 @@ func (s *Store) TransitionState(ctx context.Context, jobID, from, to string) err
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("transition job %s %s->%s: %w", jobID, from, to, err)
+	}
+	return nil
+}
+
+// RejectJob atomically sets reject_reason and transitions a job to rejected.
+func (s *Store) RejectJob(ctx context.Context, jobID, from, reason string) error {
+	allowed := ValidTransitions[from]
+	if !slices.Contains(allowed, "rejected") {
+		return fmt.Errorf("invalid transition: %s -> rejected", from)
+	}
+	tx, err := s.Writer.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("reject job %s: %w", jobID, err)
+	}
+	defer tx.Rollback()
+
+	res, err := tx.ExecContext(ctx, `
+UPDATE jobs SET state = 'rejected', reject_reason = ?,
+               completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+               updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+WHERE id = ? AND state = ?`, reason, jobID, from)
+	if err != nil {
+		return fmt.Errorf("reject job %s: %w", jobID, err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("job %s not in state %s (concurrent modification?)", jobID, from)
+	}
+	if err := enqueueNotificationEventTx(ctx, tx, jobID, ""); err != nil {
+		return fmt.Errorf("reject job %s: %w", jobID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("reject job %s: %w", jobID, err)
 	}
 	return nil
 }
@@ -339,7 +390,7 @@ WHERE 1=1`
 	if state != "" && state != "all" {
 		switch state {
 		case "active":
-			states := []string{"planning", "implementing", "reviewing", "testing", "rebasing", "resolving_conflicts"}
+			states := []string{"planning", "implementing", "reviewing", "testing", "rebasing", "resolving_conflicts", "awaiting_checks"}
 			q += " AND j.state IN (" + strings.Repeat("?,", len(states)-1) + "?)"
 			for _, s := range states {
 				args = append(args, s)
@@ -398,12 +449,13 @@ CASE
     WHEN j.state = 'rebasing' THEN 6
     WHEN j.state = 'resolving_conflicts' THEN 7
     WHEN j.state = 'ready' THEN 8
-    WHEN j.state = 'approved' AND COALESCE(j.pr_merged_at, '') = '' THEN 9
-    WHEN j.state = 'merged' OR COALESCE(j.pr_merged_at, '') <> '' THEN 10
-    WHEN j.state = 'rejected' THEN 11
-    WHEN j.state = 'failed' THEN 12
-    WHEN j.state = 'cancelled' THEN 13
-    ELSE 14
+    WHEN j.state = 'awaiting_checks' THEN 9
+    WHEN j.state = 'approved' AND COALESCE(j.pr_merged_at, '') = '' THEN 10
+    WHEN j.state = 'merged' OR COALESCE(j.pr_merged_at, '') <> '' THEN 11
+    WHEN j.state = 'rejected' THEN 12
+    WHEN j.state = 'failed' THEN 13
+    WHEN j.state = 'cancelled' THEN 14
+    ELSE 15
 END`
 	case "created_at":
 		return "j.created_at"
@@ -511,7 +563,7 @@ UPDATE jobs
 SET state = 'cancelled',
     completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-WHERE id = ? AND state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts')`, jobID)
+WHERE id = ? AND state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts', 'awaiting_checks')`, jobID)
 	if err != nil {
 		return fmt.Errorf("cancel job %s: %w", jobID, err)
 	}
@@ -538,7 +590,7 @@ UPDATE jobs
 SET state = 'cancelled',
     completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-WHERE state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts')
+WHERE state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts', 'awaiting_checks')
 RETURNING id`)
 	if err != nil {
 		return nil, fmt.Errorf("cancel all jobs: %w", err)
@@ -568,7 +620,7 @@ SET state = 'cancelled',
     completed_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
     updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 WHERE autopr_issue_id = ?
-  AND state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts')
+  AND state IN ('queued', 'planning', 'implementing', 'reviewing', 'testing', 'rebasing', 'resolving_conflicts', 'awaiting_checks')
 RETURNING id`, reason, autoprIssueID)
 	if err != nil {
 		return nil, fmt.Errorf("cancel jobs for issue %s: %w", autoprIssueID, err)
@@ -675,6 +727,43 @@ ORDER BY j.updated_at DESC`
 			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle, &j.IssueURL,
 		); err != nil {
 			return nil, fmt.Errorf("scan approved job: %w", err)
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+// ListAwaitingChecksJobs returns jobs in the awaiting_checks state that have a PR URL.
+func (s *Store) ListAwaitingChecksJobs(ctx context.Context) ([]Job, error) {
+	const q = `
+SELECT j.id, j.autopr_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
+       COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
+       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.pr_url,''),
+       COALESCE(j.reject_reason,''), COALESCE(j.pr_merged_at,''), COALESCE(j.pr_closed_at,''),
+       j.created_at, j.updated_at, COALESCE(j.started_at,''), COALESCE(j.completed_at,''),
+       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,''), COALESCE(i.url,'')
+FROM jobs j
+LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id
+WHERE j.state = 'awaiting_checks' AND j.pr_url != ''
+ORDER BY j.updated_at DESC`
+	rows, err := s.Reader.QueryContext(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("list awaiting_checks jobs: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Job
+	for rows.Next() {
+		var j Job
+		if err := rows.Scan(
+			&j.ID, &j.AutoPRIssueID, &j.ProjectName, &j.State, &j.Iteration, &j.MaxIterations,
+			&j.WorktreePath, &j.BranchName, &j.CommitSHA,
+			&j.HumanNotes, &j.ErrorMessage, &j.PRURL,
+			&j.RejectReason, &j.PRMergedAt, &j.PRClosedAt,
+			&j.CreatedAt, &j.UpdatedAt, &j.StartedAt, &j.CompletedAt,
+			&j.IssueSource, &j.SourceIssueID, &j.IssueTitle, &j.IssueURL,
+		); err != nil {
+			return nil, fmt.Errorf("scan awaiting_checks job: %w", err)
 		}
 		out = append(out, j)
 	}
