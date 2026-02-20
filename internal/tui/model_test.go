@@ -1518,13 +1518,14 @@ func TestExecuteMergeGitLabSuccessMarksJobMerged(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
-	var gotPath string
+	var gotEscapedPath, gotRequestURI string
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("tcp listener unavailable in sandbox: %v", err)
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
+		gotEscapedPath = r.URL.EscapedPath()
+		gotRequestURI = r.RequestURI
 		if r.Method != http.MethodPut {
 			t.Fatalf("unexpected method: %s", r.Method)
 		}
@@ -1580,8 +1581,16 @@ func TestExecuteMergeGitLabSuccessMarksJobMerged(t *testing.T) {
 	if res.action != "merge" {
 		t.Fatalf("expected action merge, got %q", res.action)
 	}
-	if gotPath != "/api/v4/projects/group%2Frepo/merge_requests/123/merge" {
-		t.Fatalf("unexpected gitlab merge path: %s", gotPath)
+	wantPath := "/api/v4/projects/group%2Frepo/merge_requests/123/merge"
+	requestPath := gotEscapedPath
+	if requestPath == "" {
+		requestPath = gotRequestURI
+		if i := strings.Index(requestPath, "?"); i != -1 {
+			requestPath = requestPath[:i]
+		}
+	}
+	if requestPath != wantPath {
+		t.Fatalf("unexpected gitlab merge path: want=%q escaped=%q request_uri=%q", wantPath, gotEscapedPath, gotRequestURI)
 	}
 
 	job, err := store.GetJob(ctx, jobID)
