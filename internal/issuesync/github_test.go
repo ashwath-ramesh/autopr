@@ -217,6 +217,106 @@ func TestSyncGitHubIssuesIdempotentWhileActiveJobExists(t *testing.T) {
 	}
 }
 
+func TestSyncGitHubIssuesDoesNotCreateNewJobForTerminalIssueStates(t *testing.T) {
+	for _, state := range []string{"cancelled", "rejected", "failed"} {
+		state := state
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			store := openTestStore(t)
+			defer store.Close()
+
+			cfg := &config.Config{
+				Daemon: config.DaemonConfig{MaxIterations: 3},
+			}
+			project := &config.ProjectConfig{
+				Name: "my-project",
+				GitHub: &config.ProjectGitHub{
+					Owner:         "org",
+					Repo:          "repo",
+					IncludeLabels: []string{"autopr"},
+				},
+			}
+			syncer := NewSyncer(cfg, store, make(chan string, 8))
+
+			syncer.syncGitHubIssues(ctx, project, []githubIssue{{
+				Number:    9,
+				Title:     "eligible issue",
+				Body:      "body",
+				HTMLURL:   "https://github.com/org/repo/issues/9",
+				Labels:    []githubLabel{{Name: "autopr"}},
+				UpdatedAt: "2026-02-17T11:00:00Z",
+			}})
+			if countJobs(t, ctx, store) != 1 {
+				t.Fatalf("expected one job after first sync")
+			}
+
+			jobID := getOnlyJobID(t, ctx, store)
+			moveJobToState(t, ctx, store, jobID, state)
+
+			syncer.syncGitHubIssues(ctx, project, []githubIssue{{
+				Number:    9,
+				Title:     "eligible issue",
+				Body:      "body",
+				HTMLURL:   "https://github.com/org/repo/issues/9",
+				Labels:    []githubLabel{{Name: "autopr"}},
+				UpdatedAt: "2026-02-17T11:05:00Z",
+			}})
+			if countJobs(t, ctx, store) != 1 {
+				t.Fatalf("expected one job after resync with terminal state %q", state)
+			}
+		})
+	}
+}
+
+func TestSyncGitHubIssuesCreatesJobWhenOnlyApprovedJobIsMerged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	cfg := &config.Config{
+		Daemon: config.DaemonConfig{MaxIterations: 3},
+	}
+	project := &config.ProjectConfig{
+		Name: "my-project",
+		GitHub: &config.ProjectGitHub{
+			Owner:         "org",
+			Repo:          "repo",
+			IncludeLabels: []string{"autopr"},
+		},
+	}
+	syncer := NewSyncer(cfg, store, make(chan string, 8))
+
+	issue := githubIssue{
+		Number:    10,
+		Title:     "eligible issue",
+		Body:      "body",
+		HTMLURL:   "https://github.com/org/repo/issues/10",
+		Labels:    []githubLabel{{Name: "autopr"}},
+		UpdatedAt: "2026-02-17T12:00:00Z",
+	}
+	syncer.syncGitHubIssues(ctx, project, []githubIssue{issue})
+	if countJobs(t, ctx, store) != 1 {
+		t.Fatalf("expected one job after first sync")
+	}
+
+	jobID := getOnlyJobID(t, ctx, store)
+	moveJobToState(t, ctx, store, jobID, "approved")
+	if _, err := store.Writer.ExecContext(ctx, `
+UPDATE jobs
+SET pr_merged_at = ?
+WHERE id = ?`, "2026-02-18T00:00:00Z", jobID); err != nil {
+		t.Fatalf("mark approved job merged: %v", err)
+	}
+
+	issue.UpdatedAt = "2026-02-17T12:05:00Z"
+	syncer.syncGitHubIssues(ctx, project, []githubIssue{issue})
+	if countJobs(t, ctx, store) != 2 {
+		t.Fatalf("expected merged job to allow a new job on re-sync")
+	}
+}
+
 func TestSyncGitHubIssuesClosedIssueCancelsActiveJob(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
