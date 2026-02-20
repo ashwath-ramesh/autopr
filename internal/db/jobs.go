@@ -863,6 +863,20 @@ func (s *Store) ClearWorktreePath(ctx context.Context, jobID string) error {
 	return nil
 }
 
+// HasAnyNonMergedJobForIssue checks if there's any job for an issue that has not been fully merged or closed.
+func (s *Store) HasAnyNonMergedJobForIssue(ctx context.Context, autoprIssueID string) (bool, error) {
+	const q = `SELECT COUNT(*) FROM jobs WHERE autopr_issue_id = ? AND (
+		state != 'approved'
+		OR (state = 'approved' AND (pr_merged_at IS NULL OR pr_merged_at = '') AND (pr_closed_at IS NULL OR pr_closed_at = ''))
+	)`
+	var count int
+	err := s.Reader.QueryRowContext(ctx, q, autoprIssueID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check any non-merged job: %w", err)
+	}
+	return count > 0, nil
+}
+
 // HasActiveJobForIssue checks if there's already an active or open-PR job for an issue.
 // Returns true if there's a job in progress OR an approved job whose PR hasn't been merged/closed.
 func (s *Store) HasActiveJobForIssue(ctx context.Context, autoprIssueID string) (bool, error) {

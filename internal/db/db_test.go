@@ -265,6 +265,107 @@ func TestHasActiveJobForIssue(t *testing.T) {
 	}
 }
 
+func TestHasAnyNonMergedJobForIssue(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	seedJob := func(sourceIssueID, state string, prMergedAt, prClosedAt interface{}) string {
+		t.Helper()
+		issueID, err := store.UpsertIssue(ctx, IssueUpsert{
+			ProjectName:   "myproject",
+			Source:        "github",
+			SourceIssueID: sourceIssueID,
+			Title:         sourceIssueID,
+			URL:           "https://github.com/org/repo/issues/" + sourceIssueID,
+			State:         "open",
+		})
+		if err != nil {
+			t.Fatalf("upsert issue %s: %v", sourceIssueID, err)
+		}
+		jobID, err := store.CreateJob(ctx, issueID, "myproject", 3)
+		if err != nil {
+			t.Fatalf("create job %s: %v", sourceIssueID, err)
+		}
+		_, err = store.Writer.ExecContext(ctx, `
+UPDATE jobs
+SET state = ?, branch_name = ?, pr_url = ?, pr_merged_at = ?, pr_closed_at = ?
+WHERE id = ?`, state, "autopr/"+sourceIssueID, "https://github.com/org/repo/pull/"+sourceIssueID, prMergedAt, prClosedAt, jobID)
+		if err != nil {
+			t.Fatalf("seed job %s: %v", sourceIssueID, err)
+		}
+		return issueID
+	}
+
+	tests := []struct {
+		name string
+		ffid string
+		want bool
+	}{
+		{
+			name: "cancelled job exists",
+			ffid: seedJob("cancelled-issue", "cancelled", "", ""),
+			want: true,
+		},
+		{
+			name: "rejected job exists",
+			ffid: seedJob("rejected-issue", "rejected", "", ""),
+			want: true,
+		},
+		{
+			name: "failed job exists",
+			ffid: seedJob("failed-issue", "failed", "", ""),
+			want: true,
+		},
+		{
+			name: "approved job with nil merged/closed timestamps is still non-merged",
+			ffid: seedJob("approved-open-issue", "approved", nil, nil),
+			want: true,
+		},
+		{
+			name: "approved job with merged pr is not non-merged",
+			ffid: seedJob("merged-issue", "approved", "2026-02-18T00:00:00Z", ""),
+			want: false,
+		},
+	}
+
+	noJobFFID, err := store.UpsertIssue(ctx, IssueUpsert{
+		ProjectName:   "myproject",
+		Source:        "github",
+		SourceIssueID: "no-job-issue",
+		Title:         "no job issue",
+		URL:           "https://github.com/org/repo/issues/no-job-issue",
+		State:         "open",
+	})
+	if err != nil {
+		t.Fatalf("upsert issue without jobs: %v", err)
+	}
+	tests = append(tests, struct {
+		name string
+		ffid string
+		want bool
+	}{name: "no jobs is false", ffid: noJobFFID, want: false})
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := store.HasAnyNonMergedJobForIssue(ctx, tc.ffid)
+			if err != nil {
+				t.Fatalf("check any non-merged job: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %v got %v", tc.want, got)
+			}
+		})
+	}
+}
+
 func TestRecoverInFlightJobs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

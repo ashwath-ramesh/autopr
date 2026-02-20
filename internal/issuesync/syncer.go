@@ -93,14 +93,14 @@ func (s *Syncer) syncProject(ctx context.Context, p *config.ProjectConfig) error
 	return nil
 }
 
-// createJobIfNeeded creates a job for an issue if there isn't already an active one.
+// createJobIfNeeded creates a job for an issue if there isn't already a non-merged one.
 func (s *Syncer) createJobIfNeeded(ctx context.Context, ffid, projectName string) {
-	active, err := s.store.HasActiveJobForIssue(ctx, ffid)
+	exists, err := s.store.HasAnyNonMergedJobForIssue(ctx, ffid)
 	if err != nil {
-		slog.Error("sync: check active job", "err", err)
+		slog.Error("sync: check existing job", "err", err)
 		return
 	}
-	if active {
+	if exists {
 		return
 	}
 
