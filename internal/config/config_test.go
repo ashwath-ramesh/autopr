@@ -804,6 +804,100 @@ test_cmd = "make test"
 	}
 }
 
+func TestLoadDefaultsCICheckIntervalAndTimeout(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "autopr.toml")
+
+	content := `
+[[projects]]
+name = "test"
+repo_url = "https://github.com/org/repo.git"
+test_cmd = "make test"
+
+  [projects.github]
+  owner = "org"
+  repo = "repo"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	if cfg.Daemon.CICheckInterval != "30s" {
+		t.Fatalf("expected default ci_check_interval '30s', got %q", cfg.Daemon.CICheckInterval)
+	}
+	if cfg.Daemon.CICheckTimeout != "30m" {
+		t.Fatalf("expected default ci_check_timeout '30m', got %q", cfg.Daemon.CICheckTimeout)
+	}
+}
+
+func TestLoadFailsForInvalidCICheckInterval(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "autopr.toml")
+
+	content := `
+[daemon]
+ci_check_interval = "not-a-duration"
+
+[[projects]]
+name = "test"
+repo_url = "https://github.com/org/repo.git"
+test_cmd = "make test"
+
+  [projects.github]
+  owner = "org"
+  repo = "repo"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatalf("expected error for invalid ci_check_interval")
+	}
+	if !strings.Contains(err.Error(), "ci_check_interval") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadFailsForInvalidCICheckTimeout(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "autopr.toml")
+
+	content := `
+[daemon]
+ci_check_timeout = "xyz"
+
+[[projects]]
+name = "test"
+repo_url = "https://github.com/org/repo.git"
+test_cmd = "make test"
+
+  [projects.github]
+  owner = "org"
+  repo = "repo"
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatalf("expected error for invalid ci_check_timeout")
+	}
+	if !strings.Contains(err.Error(), "ci_check_timeout") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadFailsForInvalidNotificationURL(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

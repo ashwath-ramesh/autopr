@@ -124,7 +124,7 @@ func FindGitHubPRByBranch(ctx context.Context, token, owner, repo, head, state s
 
 // CreateGitLabMR creates a merge request on GitLab and returns its web URL.
 func CreateGitLabMR(ctx context.Context, token, baseURL, projectID, sourceBranch, targetBranch, title, description string) (string, error) {
-	baseURL = normalizeGitLabBaseURL(baseURL)
+	baseURL = NormalizeGitLabBaseURL(baseURL)
 
 	payload := map[string]any{
 		"source_branch": sourceBranch,
@@ -192,7 +192,7 @@ func findGitLabMR(ctx context.Context, token, baseURL, projectID, sourceBranch s
 // FindGitLabMRByBranch looks up an existing MR for the given source branch.
 // state should be "opened" (or "open") or "all"; defaults to "opened".
 func FindGitLabMRByBranch(ctx context.Context, token, baseURL, projectID, sourceBranch, state string) (string, error) {
-	baseURL = normalizeGitLabBaseURL(baseURL)
+	baseURL = NormalizeGitLabBaseURL(baseURL)
 	if state == "" {
 		state = "opened"
 	}
@@ -303,7 +303,7 @@ var gitlabMRNumberRe = regexp.MustCompile(`/merge_requests/(\d+)`)
 // CheckGitLabMRStatus checks whether a GitLab MR has been merged or closed.
 // mrURL should be like "https://gitlab.com/org/repo/-/merge_requests/123".
 func CheckGitLabMRStatus(ctx context.Context, token, baseURL, mrURL string) (PRMergeStatus, error) {
-	baseURL = normalizeGitLabBaseURL(baseURL)
+	baseURL = NormalizeGitLabBaseURL(baseURL)
 
 	matches := gitlabMRNumberRe.FindStringSubmatch(mrURL)
 	if len(matches) < 2 {
@@ -357,7 +357,102 @@ func CheckGitLabMRStatus(ctx context.Context, token, baseURL, mrURL string) (PRM
 	return status, nil
 }
 
-func normalizeGitLabBaseURL(baseURL string) string {
+// CheckRunStatus summarises the CI check-run state for a commit.
+type CheckRunStatus struct {
+	Total           int
+	Completed       int
+	Passed          int    // conclusion: success, neutral, skipped
+	Failed          int    // conclusion: failure, cancelled, timed_out, action_required
+	Pending         int    // status: queued, in_progress
+	FailedCheckName string // first failed check name
+	FailedCheckURL  string // first failed check URL
+}
+
+// GetGitHubCheckRunStatus fetches the check-run status for a commit ref,
+// paginating through all pages to handle repos with >100 check-runs.
+func GetGitHubCheckRunStatus(ctx context.Context, token, owner, repo, ref string) (CheckRunStatus, error) {
+	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/check-runs", owner, repo, url.PathEscape(ref))
+
+	var status CheckRunStatus
+	page := 1
+	const perPage = 100
+
+	for {
+		apiURL := fmt.Sprintf("%s?per_page=%d&page=%d", baseURL, perPage, page)
+
+		resp, err := httputil.Do(ctx, func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+			if err != nil {
+				return nil, err
+			}
+			req.Header.Set("Authorization", "Bearer "+token)
+			req.Header.Set("Accept", "application/vnd.github+json")
+			return req, nil
+		}, httputil.DefaultRetryConfig())
+		if err != nil {
+			return CheckRunStatus{}, fmt.Errorf("github check-runs: %w", err)
+		}
+
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			msg := string(body)
+			if len(msg) > 512 {
+				msg = msg[:512]
+			}
+			return CheckRunStatus{}, fmt.Errorf("github check-runs: HTTP %d: %s", resp.StatusCode, msg)
+		}
+
+		var result struct {
+			TotalCount int `json:"total_count"`
+			CheckRuns  []struct {
+				Name       string `json:"name"`
+				Status     string `json:"status"`
+				Conclusion string `json:"conclusion"`
+				HTMLURL    string `json:"html_url"`
+			} `json:"check_runs"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return CheckRunStatus{}, fmt.Errorf("decode check-runs: %w", err)
+		}
+
+		// Set total from first page (consistent across pages).
+		if page == 1 {
+			status.Total = result.TotalCount
+		}
+
+		for _, cr := range result.CheckRuns {
+			if cr.Status != "completed" {
+				status.Pending++
+				continue
+			}
+			status.Completed++
+			switch cr.Conclusion {
+			case "success", "neutral", "skipped":
+				status.Passed++
+			default: // failure, cancelled, timed_out, action_required, stale
+				status.Failed++
+				if status.FailedCheckName == "" {
+					status.FailedCheckName = cr.Name
+					status.FailedCheckURL = cr.HTMLURL
+				}
+			}
+		}
+
+		// No more pages when we got fewer results than requested.
+		if len(result.CheckRuns) < perPage {
+			break
+		}
+		page++
+	}
+
+	return status, nil
+}
+
+// NormalizeGitLabBaseURL trims whitespace and trailing slashes from a GitLab
+// base URL, defaulting to "https://gitlab.com" when empty.
+func NormalizeGitLabBaseURL(baseURL string) string {
 	baseURL = strings.TrimSpace(baseURL)
 	if baseURL == "" {
 		return "https://gitlab.com"

@@ -359,11 +359,19 @@ func (r *Runner) maybeAutoPR(ctx context.Context, jobID string, issue db.Issue, 
 		_ = r.store.UpdateJobField(ctx, jobID, "pr_url", prURL)
 	}
 
-	if err := r.store.TransitionState(ctx, jobID, "ready", "approved"); err != nil {
+	// GitHub projects with CI: transition to awaiting_checks so the daemon
+	// polls check-runs before approving. GitLab projects approve immediately
+	// (CI polling not yet supported).
+	nextState := "approved"
+	if projectCfg.GitHub != nil {
+		nextState = "awaiting_checks"
+	}
+
+	if err := r.store.TransitionState(ctx, jobID, "ready", nextState); err != nil {
 		return err
 	}
 
-	slog.Info("auto-PR created", "job", jobID, "pr_url", prURL)
+	slog.Info("auto-PR created", "job", jobID, "pr_url", prURL, "next_state", nextState)
 	return nil
 }
 

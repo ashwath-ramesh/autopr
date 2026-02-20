@@ -117,6 +117,25 @@ func Run(cfg *config.Config, foreground bool) error {
 		})
 	}
 
+	// CI check-run polling goroutine (separate from sync loop for responsive CI feedback).
+	ciInterval, _ := time.ParseDuration(cfg.Daemon.CICheckInterval)
+	if ciInterval <= 0 {
+		ciInterval = 30 * time.Second // default: match applyDefaults
+	}
+	wg.Go(func() {
+		syncer := issuesync.NewSyncer(cfg, store, jobCh)
+		ticker := time.NewTicker(ciInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				syncer.CheckCIStatus(ctx)
+			}
+		}
+	})
+
 	// Notification dispatcher goroutine.
 	notificationDispatcher := notify.NewDispatcher(
 		store,

@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     autopr_issue_id TEXT NOT NULL REFERENCES issues(autopr_issue_id) ON DELETE RESTRICT,
     project_name     TEXT NOT NULL,
     state            TEXT NOT NULL DEFAULT 'queued'
-        CHECK(state IN ('queued','planning','implementing','reviewing','testing','ready','rebasing','resolving_conflicts','approved','rejected','failed','cancelled')),
+        CHECK(state IN ('queued','planning','implementing','reviewing','testing','ready','rebasing','resolving_conflicts','awaiting_checks','approved','rejected','failed','cancelled')),
     iteration        INTEGER NOT NULL DEFAULT 0 CHECK(iteration >= 0),
     max_iterations   INTEGER NOT NULL DEFAULT 3 CHECK(max_iterations > 0),
     worktree_path    TEXT,
@@ -165,6 +165,9 @@ func (s *Store) createSchema() error {
 		return err
 	}
 	if err := s.migrateArtifactsForRebaseResultKind(); err != nil {
+		return err
+	}
+	if err := s.migrateJobsForAwaitingChecksState(); err != nil {
 		return err
 	}
 	// Recreate to ensure predicate includes cancelled for existing DBs.
@@ -405,6 +408,92 @@ FROM jobs`); err != nil {
 
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit jobs rebasing migration: %w", err)
+		}
+		return nil
+	})
+}
+
+func (s *Store) migrateJobsForAwaitingChecksState() error {
+	sqlText, err := s.tableSQL("jobs")
+	if err != nil {
+		return err
+	}
+	if strings.Contains(sqlText, "'awaiting_checks'") {
+		return nil
+	}
+
+	return s.withForeignKeysOff(func() error {
+		tx, err := s.Writer.Begin()
+		if err != nil {
+			return fmt.Errorf("begin jobs awaiting_checks migration: %w", err)
+		}
+		defer tx.Rollback()
+
+		if _, err := tx.Exec(`
+CREATE TABLE jobs_new (
+    id              TEXT PRIMARY KEY,
+    autopr_issue_id TEXT NOT NULL REFERENCES issues(autopr_issue_id) ON DELETE RESTRICT,
+    project_name     TEXT NOT NULL,
+    state            TEXT NOT NULL DEFAULT 'queued'
+        CHECK(state IN ('queued','planning','implementing','reviewing','testing','ready','rebasing','resolving_conflicts','awaiting_checks','approved','rejected','failed','cancelled')),
+    iteration        INTEGER NOT NULL DEFAULT 0 CHECK(iteration >= 0),
+    max_iterations   INTEGER NOT NULL DEFAULT 3 CHECK(max_iterations > 0),
+    worktree_path    TEXT,
+    branch_name      TEXT,
+    commit_sha       TEXT,
+    human_notes      TEXT,
+    error_message    TEXT,
+    pr_url           TEXT,
+    reject_reason    TEXT,
+    created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    started_at       TEXT,
+    completed_at     TEXT,
+    pr_merged_at     TEXT,
+    pr_closed_at     TEXT
+)`); err != nil {
+			return fmt.Errorf("create jobs_new for awaiting_checks migration: %w", err)
+		}
+
+		if _, err := tx.Exec(`
+INSERT INTO jobs_new (
+    id, autopr_issue_id, project_name, state, iteration, max_iterations,
+    worktree_path, branch_name, commit_sha, human_notes, error_message,
+    pr_url, reject_reason, created_at, updated_at, started_at, completed_at,
+    pr_merged_at, pr_closed_at
+)
+SELECT
+    id, autopr_issue_id, project_name, state, iteration, max_iterations,
+    worktree_path, branch_name, commit_sha, human_notes, error_message,
+    pr_url, reject_reason, created_at, updated_at, started_at, completed_at,
+    pr_merged_at, pr_closed_at
+FROM jobs`); err != nil {
+			return fmt.Errorf("copy jobs rows for awaiting_checks migration: %w", err)
+		}
+
+		if _, err := tx.Exec(`DROP TABLE jobs`); err != nil {
+			return fmt.Errorf("drop jobs for awaiting_checks migration: %w", err)
+		}
+		if _, err := tx.Exec(`ALTER TABLE jobs_new RENAME TO jobs`); err != nil {
+			return fmt.Errorf("rename jobs_new for awaiting_checks migration: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)`); err != nil {
+			return fmt.Errorf("create idx_jobs_state for awaiting_checks migration: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_issue ON jobs(autopr_issue_id)`); err != nil {
+			return fmt.Errorf("create idx_jobs_issue for awaiting_checks migration: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_jobs_state_project ON jobs(state, project_name)`); err != nil {
+			return fmt.Errorf("create idx_jobs_state_project for awaiting_checks migration: %w", err)
+		}
+		if _, err := tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active_per_issue
+    ON jobs(autopr_issue_id)
+    WHERE state NOT IN ('approved', 'rejected', 'failed', 'cancelled')`); err != nil {
+			return fmt.Errorf("create active-job index for awaiting_checks migration: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit jobs awaiting_checks migration: %w", err)
 		}
 		return nil
 	})

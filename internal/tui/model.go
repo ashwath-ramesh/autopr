@@ -46,6 +46,8 @@ var (
 		"rebasing":            lipgloss.NewStyle().Foreground(lipgloss.Color("135")),
 		"resolving":           lipgloss.NewStyle().Foreground(lipgloss.Color("202")),
 		"resolving_conflicts": lipgloss.NewStyle().Foreground(lipgloss.Color("202")),
+		"checking ci":        lipgloss.NewStyle().Foreground(lipgloss.Color("33")),
+		"awaiting_checks":    lipgloss.NewStyle().Foreground(lipgloss.Color("33")),
 		"approved":            lipgloss.NewStyle().Foreground(lipgloss.Color("40")),
 		"merged":              lipgloss.NewStyle().Foreground(lipgloss.Color("141")),
 		"pr closed":           lipgloss.NewStyle().Foreground(lipgloss.Color("208")),
@@ -76,6 +78,7 @@ var filterStateCycle = []string{
 	filterAllState,
 	"queued",
 	"active",
+	"awaiting_checks",
 	"rebasing",
 	"resolving_conflicts",
 	"ready",
@@ -1292,7 +1295,7 @@ func (m Model) listView() string {
 	// Job state counters.
 	counts := m.jobCounts()
 	active := counts["planning"] + counts["implementing"] + counts["reviewing"] + counts["testing"] +
-		counts["rebasing"] + counts["resolving_conflicts"]
+		counts["rebasing"] + counts["resolving_conflicts"] + counts["awaiting_checks"]
 	b.WriteString(fmt.Sprintf("  %s %d   %s %d   %s %d   %s %d   %s %d\n",
 		labelStyle.Render("queued"), counts["queued"],
 		labelStyle.Render("active"), active,

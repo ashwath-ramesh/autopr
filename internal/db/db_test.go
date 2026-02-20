@@ -186,7 +186,8 @@ func TestValidTransitionsContract(t *testing.T) {
 			"testing":             {"ready", "implementing", "rebasing", "failed", "cancelled"},
 			"rebasing":            {"resolving_conflicts", "ready", "failed", "cancelled"},
 			"resolving_conflicts": {"ready", "failed", "cancelled"},
-			"ready":               {"approved", "rejected"},
+			"ready":               {"awaiting_checks", "approved", "rejected"},
+		"awaiting_checks":     {"approved", "rejected", "cancelled"},
 			"failed":       {"queued"},
 			"rejected":     {"queued"},
 			"cancelled":    {"queued"},
@@ -2520,4 +2521,110 @@ WHERE id = ?`, state, createdAt, updatedAt, prMergedAt, jobID)
 		t.Fatalf("set order fields for job %s: %v", sourceIssueID, err)
 	}
 	return jobID
+}
+
+func TestAwaitingChecksTransitions(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	// ready -> awaiting_checks
+	jobID := createTestJobWithState(t, ctx, store, "ac-ready", "ready", "autopr/ac-1", "https://github.com/org/repo/pull/1", "", "")
+	if err := store.TransitionState(ctx, jobID, "ready", "awaiting_checks"); err != nil {
+		t.Fatalf("transition ready->awaiting_checks: %v", err)
+	}
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.State != "awaiting_checks" {
+		t.Fatalf("expected awaiting_checks, got %q", job.State)
+	}
+
+	// awaiting_checks -> approved
+	if err := store.TransitionState(ctx, jobID, "awaiting_checks", "approved"); err != nil {
+		t.Fatalf("transition awaiting_checks->approved: %v", err)
+	}
+
+	// awaiting_checks -> rejected
+	jobID2 := createTestJobWithState(t, ctx, store, "ac-reject", "awaiting_checks", "autopr/ac-2", "https://github.com/org/repo/pull/2", "", "")
+	if err := store.TransitionState(ctx, jobID2, "awaiting_checks", "rejected"); err != nil {
+		t.Fatalf("transition awaiting_checks->rejected: %v", err)
+	}
+
+	// awaiting_checks -> cancelled
+	jobID3 := createTestJobWithState(t, ctx, store, "ac-cancel", "awaiting_checks", "autopr/ac-3", "https://github.com/org/repo/pull/3", "", "")
+	if err := store.TransitionState(ctx, jobID3, "awaiting_checks", "cancelled"); err != nil {
+		t.Fatalf("transition awaiting_checks->cancelled: %v", err)
+	}
+
+	// Invalid: awaiting_checks -> planning
+	jobID4 := createTestJobWithState(t, ctx, store, "ac-invalid", "awaiting_checks", "autopr/ac-4", "https://github.com/org/repo/pull/4", "", "")
+	if err := store.TransitionState(ctx, jobID4, "awaiting_checks", "planning"); err == nil {
+		t.Fatalf("expected error for invalid transition awaiting_checks->planning")
+	}
+}
+
+func TestListAwaitingChecksJobs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	// Job in awaiting_checks with PR URL — should be returned.
+	createTestJobWithState(t, ctx, store, "lac-with-pr", "awaiting_checks", "autopr/lac-1", "https://github.com/org/repo/pull/10", "", "")
+
+	// Job in awaiting_checks without PR URL — should NOT be returned.
+	createTestJobWithState(t, ctx, store, "lac-no-pr", "awaiting_checks", "autopr/lac-2", "", "", "")
+
+	// Job in approved state — should NOT be returned.
+	createTestJobWithState(t, ctx, store, "lac-approved", "approved", "autopr/lac-3", "https://github.com/org/repo/pull/11", "", "")
+
+	jobs, err := store.ListAwaitingChecksJobs(ctx)
+	if err != nil {
+		t.Fatalf("list awaiting_checks jobs: %v", err)
+	}
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 awaiting_checks job, got %d", len(jobs))
+	}
+	if jobs[0].PRURL != "https://github.com/org/repo/pull/10" {
+		t.Fatalf("expected PR URL, got %q", jobs[0].PRURL)
+	}
+}
+
+func TestCancelJobAwaitingChecks(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	jobID := createTestJobWithState(t, ctx, store, "cancel-ac", "awaiting_checks", "autopr/cancel-ac", "https://github.com/org/repo/pull/20", "", "")
+
+	if err := store.CancelJob(ctx, jobID); err != nil {
+		t.Fatalf("cancel job: %v", err)
+	}
+
+	job, err := store.GetJob(ctx, jobID)
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	if job.State != "cancelled" {
+		t.Fatalf("expected cancelled state, got %q", job.State)
+	}
 }

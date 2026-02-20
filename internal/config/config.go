@@ -76,10 +76,11 @@ func SaveCredentials(creds *Credentials) error {
 }
 
 type Config struct {
-	DBPath    string `toml:"db_path"`
-	ReposRoot string `toml:"repos_root"`
-	LogLevel  string `toml:"log_level"`
-	LogFile   string `toml:"log_file"`
+	ConfigVersion int    `toml:"config_version"`
+	DBPath        string `toml:"db_path"`
+	ReposRoot     string `toml:"repos_root"`
+	LogLevel      string `toml:"log_level"`
+	LogFile       string `toml:"log_file"`
 
 	Daemon        DaemonConfig        `toml:"daemon"`
 	Tokens        TokensConfig        `toml:"tokens"`
@@ -94,13 +95,15 @@ type Config struct {
 }
 
 type DaemonConfig struct {
-	WebhookPort   int    `toml:"webhook_port"`
-	WebhookSecret string `toml:"webhook_secret"`
-	MaxWorkers    int    `toml:"max_workers"`
-	MaxIterations int    `toml:"max_iterations"`
-	SyncInterval  string `toml:"sync_interval"`
-	PIDFile       string `toml:"pid_file"`
-	AutoPR        bool   `toml:"auto_pr"`
+	WebhookPort     int    `toml:"webhook_port"`
+	WebhookSecret   string `toml:"webhook_secret"`
+	MaxWorkers      int    `toml:"max_workers"`
+	MaxIterations   int    `toml:"max_iterations"`
+	SyncInterval    string `toml:"sync_interval"`
+	PIDFile         string `toml:"pid_file"`
+	AutoPR          bool   `toml:"auto_pr"`
+	CICheckInterval string `toml:"ci_check_interval"`
+	CICheckTimeout  string `toml:"ci_check_timeout"`
 }
 
 type TokensConfig struct {
@@ -270,6 +273,12 @@ func applyDefaults(cfg *Config) {
 			cfg.Daemon.PIDFile = "autopr.pid"
 		}
 	}
+	if cfg.Daemon.CICheckInterval == "" {
+		cfg.Daemon.CICheckInterval = "30s"
+	}
+	if cfg.Daemon.CICheckTimeout == "" {
+		cfg.Daemon.CICheckTimeout = "30m"
+	}
 	if cfg.Sentry.BaseURL == "" {
 		cfg.Sentry.BaseURL = "https://sentry.io"
 	}
@@ -369,6 +378,12 @@ func validate(cfg *Config) error {
 	}
 	if _, err := time.ParseDuration(cfg.Daemon.SyncInterval); err != nil {
 		return fmt.Errorf("invalid daemon.sync_interval %q: %w", cfg.Daemon.SyncInterval, err)
+	}
+	if _, err := time.ParseDuration(cfg.Daemon.CICheckInterval); err != nil {
+		return fmt.Errorf("invalid daemon.ci_check_interval %q: %w", cfg.Daemon.CICheckInterval, err)
+	}
+	if _, err := time.ParseDuration(cfg.Daemon.CICheckTimeout); err != nil {
+		return fmt.Errorf("invalid daemon.ci_check_timeout %q: %w", cfg.Daemon.CICheckTimeout, err)
 	}
 	normalizedTriggers, err := validateNotificationsConfig(cfg.Notifications)
 	if err != nil {

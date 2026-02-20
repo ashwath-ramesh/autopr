@@ -81,6 +81,9 @@ func loadConfig() (*config.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := config.MigrateConfigFile(path); err != nil {
+		slog.Warn("config migration skipped", "err", err)
+	}
 	return config.Load(path)
 }
 
