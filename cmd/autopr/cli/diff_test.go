@@ -231,6 +231,7 @@ func setupDiffWorktree(t *testing.T, tmp string) string {
 	runGitCmd(t, seedDir, "branch", "-M", "main")
 	runGitCmd(t, seedDir, "remote", "add", "origin", remoteDir)
 	runGitCmd(t, seedDir, "push", "-u", "origin", "main")
+	runGitCmd(t, remoteDir, "symbolic-ref", "HEAD", "refs/heads/main")
 	runGitCmd(t, "", "clone", remoteDir, worktreePath)
 
 	return worktreePath
