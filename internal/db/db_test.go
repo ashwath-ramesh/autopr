@@ -1487,7 +1487,7 @@ func TestResetJobForResumeKeepsIterationAndPreservesWorktree(t *testing.T) {
 	if claimedID != jobID {
 		t.Fatalf("expected claimed job %q, got %q", jobID, claimedID)
 	}
-	if err := store.TransitionState(ctx, "planning", "failed"); err != nil {
+	if err := store.TransitionState(ctx, jobID, "planning", "failed"); err != nil {
 		t.Fatalf("transition planning->failed: %v", err)
 	}
 	if _, err := store.Writer.ExecContext(ctx, `
@@ -1566,7 +1566,7 @@ func TestResetJobForResumeRejectsNonTerminalState(t *testing.T) {
 	if claimedID != jobID {
 		t.Fatalf("expected claimed job %q, got %q", jobID, claimedID)
 	}
-	if err := store.TransitionState(ctx, "planning", "implementing"); err != nil {
+	if err := store.TransitionState(ctx, jobID, "planning", "implementing"); err != nil {
 		t.Fatalf("planning->implementing: %v", err)
 	}
 
@@ -1613,7 +1613,7 @@ func TestResetJobForResumeBlockedByActiveSibling(t *testing.T) {
 	if claimedID != jobA {
 		t.Fatalf("expected claimed job A %q, got %q", jobA, claimedID)
 	}
-	if err := store.TransitionState(ctx, "planning", "failed"); err != nil {
+	if err := store.TransitionState(ctx, jobA, "planning", "failed"); err != nil {
 		t.Fatalf("transition A failed: %v", err)
 	}
 

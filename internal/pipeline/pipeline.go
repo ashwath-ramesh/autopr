@@ -157,7 +157,7 @@ func (r *Runner) runSteps(ctx context.Context, jobID, currentState string, issue
 				if step.next == "" {
 					continue
 				}
-				if err := r.store.TransitionState(ctx, step.state, step.next); err != nil {
+				if err := r.store.TransitionState(ctx, jobID, step.state, step.next); err != nil {
 					if r.jobCancelled(jobID) {
 						return errJobCancelled
 					}

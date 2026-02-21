@@ -70,24 +70,24 @@ func setupRunStepsJob(t *testing.T, provider llm.Provider, initialState string) 
 		case "planning":
 			// Nothing to do; job is now planning.
 		case "implementing":
-			if err := store.TransitionState(ctx, "planning", "implementing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "planning", "implementing"); err != nil {
 				t.Fatalf("planning->implementing: %v", err)
 			}
 		case "reviewing":
-			if err := store.TransitionState(ctx, "planning", "implementing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "planning", "implementing"); err != nil {
 				t.Fatalf("planning->implementing: %v", err)
 			}
-			if err := store.TransitionState(ctx, "implementing", "reviewing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "implementing", "reviewing"); err != nil {
 				t.Fatalf("implementing->reviewing: %v", err)
 			}
 		case "testing":
-			if err := store.TransitionState(ctx, "planning", "implementing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "planning", "implementing"); err != nil {
 				t.Fatalf("planning->implementing: %v", err)
 			}
-			if err := store.TransitionState(ctx, "implementing", "reviewing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "implementing", "reviewing"); err != nil {
 				t.Fatalf("implementing->reviewing: %v", err)
 			}
-			if err := store.TransitionState(ctx, "reviewing", "testing"); err != nil {
+			if err := store.TransitionState(ctx, jobID, "reviewing", "testing"); err != nil {
 				t.Fatalf("reviewing->testing: %v", err)
 			}
 		default:
