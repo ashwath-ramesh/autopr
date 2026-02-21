@@ -334,6 +334,42 @@ func TestRunListPaginationLastPage(t *testing.T) {
 	}
 }
 
+func TestRunListPaginationWithStateFilter(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := writeStatusConfig(t, tmp)
+	dbPath := filepath.Join(tmp, "autopr.db")
+	ordered := seedPaginationJobs(t, dbPath)
+
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.Writer.ExecContext(context.Background(), `
+UPDATE jobs
+SET state = CASE id
+  WHEN ? THEN 'planning'
+  WHEN ? THEN 'implementing'
+  ELSE 'queued'
+END`, ordered[4], ordered[3]); err != nil {
+		t.Fatalf("set state values: %v", err)
+	}
+
+	out := runListWithTestConfig(t, cfg, false, "--state", "active", "--page", "1", "--page-size", "1")
+	if !strings.Contains(out, "Page 1/2, total rows: 2") {
+		t.Fatalf("expected metadata line, got %q", out)
+	}
+	gotIDs := extractListOutputIDs(out)
+	if len(gotIDs) != 1 {
+		t.Fatalf("expected one row on page one, got %d", len(gotIDs))
+	}
+	want := []string{db.ShortID(ordered[4])}
+	if !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("unexpected page one active IDs: got %v want %v", gotIDs, want)
+	}
+}
+
 func TestRunListPaginationOutOfRangePage(t *testing.T) {
 	tmp := t.TempDir()
 	cfg := writeStatusConfig(t, tmp)

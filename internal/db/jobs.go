@@ -447,7 +447,7 @@ LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id ` + whereClause
 	if ascending {
 		direction = "ASC"
 	}
-	q += fmt.Sprintf(` ORDER BY %s %s, j.id`, orderExpr, direction)
+	q += " ORDER BY " + orderExpr + " " + direction + ", j.id"
 
 	rows, err := s.Reader.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -495,7 +495,7 @@ func (s *Store) ListJobsPage(ctx context.Context, project, state, orderBy string
 	}
 
 	offset := (page - 1) * pageSize
-	q := fmt.Sprintf(`
+	q := `
 	SELECT j.id, j.autopr_issue_id, j.project_name, j.state, j.iteration, j.max_iterations,
 	       COALESCE(j.worktree_path,''), COALESCE(j.branch_name,''), COALESCE(j.commit_sha,''),
 	       COALESCE(j.human_notes,''), COALESCE(j.error_message,''), COALESCE(j.pr_url,''),
@@ -504,7 +504,7 @@ func (s *Store) ListJobsPage(ctx context.Context, project, state, orderBy string
 	       COALESCE(j.ci_started_at,''), COALESCE(j.ci_completed_at,''), COALESCE(j.ci_status_summary,''),
 	       COALESCE(i.source,''), COALESCE(i.source_issue_id,''), COALESCE(i.title,''), COALESCE(i.url,'')
 FROM jobs j
-LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id ` + whereClause + fmt.Sprintf(` ORDER BY %s %s, j.id LIMIT ? OFFSET ?`, orderExpr, direction))
+LEFT JOIN issues i ON j.autopr_issue_id = i.autopr_issue_id ` + whereClause + " ORDER BY " + orderExpr + " " + direction + ", j.id LIMIT ? OFFSET ?"
 	args = append(args, pageSize, offset)
 
 	rows, err := s.Reader.QueryContext(ctx, q, args...)

@@ -2781,6 +2781,77 @@ func TestListJobsPageUsesSameOrderingAsListJobs(t *testing.T) {
 	}
 }
 
+func TestListJobsPageFiltersAndValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	store, err := Open(filepath.Join(tmp, "autopr.db"))
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	planID := createTestJobWithOrderFields(t, ctx, store, "plan-alpha", "alpha", "planning", "2025-02-01T08:00:00Z", "2025-02-01T09:00:00Z", "")
+	implementID := createTestJobWithOrderFields(t, ctx, store, "implement-alpha", "alpha", "implementing", "2025-02-01T08:30:00Z", "2025-02-01T10:00:00Z", "")
+	_ = createTestJobWithOrderFields(t, ctx, store, "merged-alpha", "alpha", "approved", "2025-02-01T09:00:00Z", "2025-02-01T11:00:00Z", "2025-02-01T11:00:00Z")
+	_ = createTestJobWithOrderFields(t, ctx, store, "queued-beta", "beta", "queued", "2025-02-01T09:30:00Z", "2025-02-01T12:00:00Z", "")
+
+	active, total, err := store.ListJobsPage(ctx, "alpha", "active", "updated_at", false, 1, 1)
+	if err != nil {
+		t.Fatalf("list alpha active jobs: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2 active alpha jobs, got %d", total)
+	}
+	if len(active) != 1 || active[0].ID != implementID {
+		t.Fatalf("expected first page to return newest active job, got %v", active)
+	}
+
+	activePageTwo, total, err := store.ListJobsPage(ctx, "alpha", "active", "updated_at", false, 2, 1)
+	if err != nil {
+		t.Fatalf("list alpha active jobs page two: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2 active alpha jobs on page two, got %d", total)
+	}
+	if len(activePageTwo) != 1 || activePageTwo[0].ID != planID {
+		t.Fatalf("expected second page to return older active job, got %v", activePageTwo)
+	}
+
+	outOfRange, total, err := store.ListJobsPage(ctx, "alpha", "active", "updated_at", false, 3, 1)
+	if err != nil {
+		t.Fatalf("list alpha active jobs page three: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("expected total=2 on out-of-range page, got %d", total)
+	}
+	if len(outOfRange) != 0 {
+		t.Fatalf("expected out-of-range page to be empty, got %d", len(outOfRange))
+	}
+
+	merged, total, err := store.ListJobsPage(ctx, "alpha", "merged", "updated_at", false, 1, 10)
+	if err != nil {
+		t.Fatalf("list alpha merged jobs: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("expected total=1 merged alpha jobs, got %d", total)
+	}
+	if len(merged) != 1 {
+		t.Fatalf("expected one merged alpha job, got %v", merged)
+	}
+
+	if _, _, err := store.ListJobsPage(ctx, "alpha", "all", "updated_at", false, 0, 10); err == nil {
+		t.Fatalf("expected error for page=0")
+	}
+	if _, _, err := store.ListJobsPage(ctx, "alpha", "all", "updated_at", false, 1, 0); err == nil {
+		t.Fatalf("expected error for page-size=0")
+	}
+	if _, _, err := store.ListJobsPage(ctx, "alpha", "all", "updated_at", false, 1, -1); err == nil {
+		t.Fatalf("expected error for negative page-size")
+	}
+}
+
 func createTestJobWithState(t *testing.T, ctx context.Context, store *Store, sourceIssueID, state, branch, prURL, mergedAt, closedAt string) string {
 	t.Helper()
 	issueID, err := store.UpsertIssue(ctx, IssueUpsert{
