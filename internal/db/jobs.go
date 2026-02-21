@@ -602,7 +602,7 @@ func (s *Store) HasCompletedSessionForStep(ctx context.Context, jobID string, it
 	const q = `SELECT COUNT(*) FROM llm_sessions WHERE job_id = ? AND iteration = ? AND step = ? AND status = 'completed'`
 	var count int
 	if err := s.Reader.QueryRowContext(ctx, q, jobID, iteration, step).Scan(&count); err != nil {
-		return false, fmt.Errorf("check completed session for %s %s/%d/%s: %w", jobID, step, iteration, err)
+		return false, fmt.Errorf("check completed session for job %s step %s iteration %d: %w", jobID, step, iteration, err)
 	}
 	return count > 0, nil
 }
