@@ -13,6 +13,9 @@ import (
 var (
 	listProject string
 	listState   string
+	listSort    string
+	listAsc     bool
+	listDesc    bool
 	listCost    bool
 )
 
@@ -25,6 +28,9 @@ var listCmd = &cobra.Command{
 func init() {
 	listCmd.Flags().StringVar(&listProject, "project", "", "filter by project name")
 	listCmd.Flags().StringVar(&listState, "state", "all", "filter by state")
+	listCmd.Flags().StringVar(&listSort, "sort", "updated_at", "sort by field: updated_at, created_at, state, or project")
+	listCmd.Flags().BoolVar(&listAsc, "asc", false, "sort in ascending order")
+	listCmd.Flags().BoolVar(&listDesc, "desc", false, "sort in descending order (default)")
 	listCmd.Flags().BoolVar(&listCost, "cost", false, "show estimated cost column")
 	rootCmd.AddCommand(listCmd)
 }
@@ -34,13 +40,26 @@ func runList(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	sortBy, err := normalizeListSort(listSort)
+	if err != nil {
+		return err
+	}
+	state, err := normalizeListState(listState)
+	if err != nil {
+		return err
+	}
+	if listAsc && listDesc {
+		return fmt.Errorf("--asc and --desc cannot be used together")
+	}
+	ascending := listAsc
+
 	store, err := openStore(cfg)
 	if err != nil {
 		return err
 	}
 	defer store.Close()
 
-	jobs, err := store.ListJobs(cmd.Context(), listProject, listState, "updated_at", false)
+	jobs, err := store.ListJobs(cmd.Context(), listProject, state, sortBy, ascending)
 	if err != nil {
 		return err
 	}
@@ -117,6 +136,28 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Total: %d jobs (%d queued, %d active, %d failed, %d merged)\n", total, queued, active, failed, merged)
 	return nil
+}
+
+func normalizeListSort(sortBy string) (string, error) {
+	switch sortBy {
+	case "updated_at", "created_at", "state", "project":
+		return sortBy, nil
+	default:
+		return "", fmt.Errorf("invalid --sort %q (expected one of: updated_at, created_at, state, project)", sortBy)
+	}
+}
+
+func normalizeListState(state string) (string, error) {
+	if state == "resolving" {
+		return "resolving_conflicts", nil
+	}
+
+	switch state {
+	case "all", "active", "merged", "queued", "planning", "implementing", "reviewing", "testing", "ready", "rebasing", "resolving_conflicts", "awaiting_checks", "approved", "rejected", "failed", "cancelled":
+		return state, nil
+	default:
+		return "", fmt.Errorf("invalid --state %q (expected one of: all, active, merged, queued, planning, implementing, reviewing, testing, ready, rebasing, resolving, resolving_conflicts, awaiting_checks, approved, rejected, failed, cancelled)", state)
+	}
 }
 
 func isActiveState(state string) bool {
