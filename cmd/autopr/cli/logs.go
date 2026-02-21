@@ -242,7 +242,7 @@ func resolveLogsSession(sessions []db.LLMSession, selector string, jobID string)
 	}
 
 	for _, session := range sessions {
-		if session.ID != value {
+		if session.ID != int(value) {
 			continue
 		}
 		if session.JobID != "" && session.JobID != jobID {
@@ -251,7 +251,7 @@ func resolveLogsSession(sessions []db.LLMSession, selector string, jobID string)
 		return session, nil
 	}
 
-	return db.LLMSession{}, fmt.Errorf("--session %d is out of range (1-%d)", value, len(sessions))
+	return db.LLMSession{}, fmt.Errorf("--session %d is out of range (1-%d) and no matching session id was found for job %s", value, len(sessions), jobID)
 }
 
 func printSessionText(session db.LLMSession, mode logsOutputMode) {

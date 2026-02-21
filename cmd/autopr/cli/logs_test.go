@@ -45,6 +45,21 @@ func TestResolveLogsSessionByID(t *testing.T) {
 	}
 }
 
+func TestResolveLogsSessionIndexFirstOverID(t *testing.T) {
+	sessions := []db.LLMSession{
+		{ID: 101, JobID: "job-1"},
+		{ID: 1, JobID: "job-1"},
+	}
+
+	session, err := resolveLogsSession(sessions, "1", "job-1")
+	if err != nil {
+		t.Fatalf("resolveLogsSession(index-first): unexpected error: %v", err)
+	}
+	if got, want := session.ID, 101; got != want {
+		t.Fatalf("resolveLogsSession(index-first): expected %d, got %d", want, got)
+	}
+}
+
 func TestResolveLogsSessionInvalidSelectors(t *testing.T) {
 	sessions := []db.LLMSession{
 		{ID: 11, JobID: "job-1"},
@@ -208,7 +223,17 @@ func writeLogsConfig(t *testing.T, dir string) string {
 	t.Helper()
 	cfgPath := filepath.Join(dir, "autopr.toml")
 	dbPath := filepath.Join(dir, "autopr.db")
-	cfg := fmt.Sprintf(`db_path = %q`, dbPath)
+	cfg := fmt.Sprintf(`db_path = %q
+
+[[projects]]
+name = "project"
+repo_url = "https://github.com/autopr/placeholder"
+test_cmd = "echo ok"
+
+[projects.github]
+owner = "autopr"
+repo = "placeholder"
+`, dbPath)
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
