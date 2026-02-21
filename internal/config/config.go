@@ -128,8 +128,8 @@ type NotificationsConfig struct {
 }
 
 const (
-	TriggerNeedsPR = "needs_pr"
-	TriggerFailed  = "failed"
+	TriggerNeedsPR   = "needs_pr"
+	TriggerFailed    = "failed"
 	TriggerPRCreated = "pr_created"
 	TriggerPRMerged  = "pr_merged"
 
@@ -144,16 +144,16 @@ var defaultNotificationTriggers = []string{
 }
 
 type ProjectConfig struct {
-	Name                            string          `toml:"name"`
-	RepoURL                         string          `toml:"repo_url"`
-	TestCmd                         string          `toml:"test_cmd"`
-	BaseBranch                      string          `toml:"base_branch"`
-	MaxAutoResolvableConflictLines  int             `toml:"max_auto_resolvable_conflict_lines"`
-	ExcludeLabels                   []string        `toml:"exclude_labels"`
-	GitLab                          *ProjectGitLab  `toml:"gitlab"`
-	GitHub                          *ProjectGitHub  `toml:"github"`
-	Sentry                          *ProjectSentry  `toml:"sentry"`
-	Prompts                         *ProjectPrompts `toml:"prompts"`
+	Name                           string          `toml:"name"`
+	RepoURL                        string          `toml:"repo_url"`
+	TestCmd                        string          `toml:"test_cmd"`
+	BaseBranch                     string          `toml:"base_branch"`
+	MaxAutoResolvableConflictLines int             `toml:"max_auto_resolvable_conflict_lines"`
+	ExcludeLabels                  []string        `toml:"exclude_labels"`
+	GitLab                         *ProjectGitLab  `toml:"gitlab"`
+	GitHub                         *ProjectGitHub  `toml:"github"`
+	Sentry                         *ProjectSentry  `toml:"sentry"`
+	Prompts                        *ProjectPrompts `toml:"prompts"`
 }
 
 type ProjectGitLab struct {
@@ -165,7 +165,23 @@ type ProjectGitLab struct {
 type ProjectGitHub struct {
 	Owner         string   `toml:"owner"`
 	Repo          string   `toml:"repo"`
+	ForkOwner     string   `toml:"fork_owner"`
 	IncludeLabels []string `toml:"include_labels"`
+}
+
+func (github *ProjectGitHub) GitHubForkHead(branch string) string {
+	branch = strings.TrimSpace(branch)
+	if github == nil || github.ForkOwner == "" {
+		return branch
+	}
+	return fmt.Sprintf("%s:%s", github.ForkOwner, branch)
+}
+
+func (github *ProjectGitHub) GitHubForkRemote() string {
+	if github == nil || strings.TrimSpace(github.ForkOwner) == "" || strings.TrimSpace(github.Repo) == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/%s.git", strings.TrimSpace(github.ForkOwner), strings.TrimSpace(github.Repo))
 }
 
 type ProjectSentry struct {
@@ -190,10 +206,10 @@ const DefaultExcludeLabel = "autopr-skip"
 const DefaultAssignedTeam = "autopr"
 
 type ProjectPrompts struct {
-	Plan       string `toml:"plan"`
-	PlanReview string `toml:"plan_review"`
-	Implement  string `toml:"implement"`
-	CodeReview string `toml:"code_review"`
+	Plan            string `toml:"plan"`
+	PlanReview      string `toml:"plan_review"`
+	Implement       string `toml:"implement"`
+	CodeReview      string `toml:"code_review"`
 	ConflictResolve string `toml:"conflict_resolve"`
 }
 
@@ -413,6 +429,11 @@ func validate(cfg *Config) error {
 		cfg.Projects[i].ExcludeLabels = normalized
 
 		if p.GitHub != nil {
+			rawForkOwner := p.GitHub.ForkOwner
+			p.GitHub.ForkOwner = strings.TrimSpace(rawForkOwner)
+			if rawForkOwner != "" && p.GitHub.ForkOwner == "" {
+				return fmt.Errorf("project %q github.fork_owner: cannot be blank", p.Name)
+			}
 			normalized, err := normalizeLabels(p.GitHub.IncludeLabels)
 			if err != nil {
 				return fmt.Errorf("project %q github.include_labels: %w", p.Name, err)

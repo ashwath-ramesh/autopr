@@ -66,8 +66,18 @@ func runApprove(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("rebase before push: %w", err)
 	}
 
+	pushRemote := "origin"
+	pushHead := job.BranchName
+	if proj.GitHub != nil {
+		var err error
+		pushRemote, pushHead, err = pipeline.ResolveGitHubPushTarget(cmd.Context(), proj, job.BranchName, job.WorktreePath, cfg.Tokens.GitHub)
+		if err != nil {
+			return fmt.Errorf("resolve push target: %w", err)
+		}
+	}
+
 	// Push branch to remote before creating PR.
-	if err := git.PushBranchWithLease(cmd.Context(), job.WorktreePath, job.BranchName); err != nil {
+	if err := git.PushBranchWithLeaseToRemote(cmd.Context(), job.WorktreePath, pushRemote, job.BranchName); err != nil {
 		return fmt.Errorf("push branch: %w", err)
 	}
 
@@ -79,7 +89,7 @@ func runApprove(cmd *cobra.Command, args []string) error {
 		prTitle, prBody := pipeline.BuildPRContent(cmd.Context(), store, job, issue)
 
 		// Create PR/MR depending on source.
-		prURL, err = createPR(cmd, cfg, proj, job, prTitle, prBody)
+		prURL, err = createPR(cmd, cfg, proj, job, pushHead, prTitle, prBody)
 		if err != nil {
 			return fmt.Errorf("create PR: %w", err)
 		}
@@ -113,7 +123,7 @@ func runApprove(cmd *cobra.Command, args []string) error {
 }
 
 // createPR creates a GitHub PR or GitLab MR depending on the project config.
-func createPR(cmd *cobra.Command, cfg *config.Config, proj *config.ProjectConfig, job db.Job, title, body string) (string, error) {
+func createPR(cmd *cobra.Command, cfg *config.Config, proj *config.ProjectConfig, job db.Job, head, title, body string) (string, error) {
 	if job.BranchName == "" {
 		return "", fmt.Errorf("job has no branch name — was the branch pushed?")
 	}
@@ -128,7 +138,7 @@ func createPR(cmd *cobra.Command, cfg *config.Config, proj *config.ProjectConfig
 			cfg.Tokens.GitHub,
 			proj.GitHub.Owner,
 			proj.GitHub.Repo,
-			job.BranchName,
+			head,
 			proj.BaseBranch,
 			title,
 			body,

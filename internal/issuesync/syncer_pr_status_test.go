@@ -71,6 +71,41 @@ func TestCheckPRStatus_BranchFallbackMergedReadyJob(t *testing.T) {
 	}
 }
 
+func TestCheckPRStatus_BranchFallbackUsesForkQualifiedHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := openTestStore(t)
+	defer store.Close()
+
+	jobID := createSyncTestJob(t, ctx, store, "project-gh-fork", "fallback-fork", "ready", "autopr/branch-fork", "")
+
+	cfg := &config.Config{
+		Tokens: config.TokensConfig{GitHub: "token"},
+		Projects: []config.ProjectConfig{
+			{
+				Name:   "project-gh-fork",
+				GitHub: &config.ProjectGitHub{Owner: "acme", Repo: "repo", ForkOwner: "my-fork"},
+			},
+		},
+	}
+	s := NewSyncer(cfg, store, make(chan string, 1))
+	s.findGitHubPRByBranch = func(ctx context.Context, token, owner, repo, head, state string) (string, error) {
+		if head != "my-fork:autopr/branch-fork" {
+			t.Fatalf("expected fork-qualified head, got %q", head)
+		}
+		if owner != "acme" || repo != "repo" || token != "token" || state != "all" {
+			t.Fatalf("unexpected lookup args: %s %s %s %s", owner, repo, head, state)
+		}
+		return "", nil
+	}
+	s.checkGitHubPRStatus = func(ctx context.Context, token, prURL string) (git.PRMergeStatus, error) {
+		t.Fatalf("status check should not run when no PR is found")
+		return git.PRMergeStatus{}, nil
+	}
+
+	s.checkPRStatus(ctx)
+}
+
 func TestCheckPRStatus_BranchFallbackOpenPRTransitionsApproved(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

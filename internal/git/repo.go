@@ -71,24 +71,46 @@ func CommitAll(ctx context.Context, dir, message string) (string, error) {
 // NOTE: This requires Contents: Read and write on the GitHub fine-grained PAT.
 // With read-only access, this call will fail with a permission error.
 func PushBranch(ctx context.Context, dir, branchName string) error {
-	return runGit(ctx, dir, "push", "origin", branchName)
+	return PushBranchToRemote(ctx, dir, "origin", branchName)
 }
 
 // PushBranchWithLease pushes a branch with --force-with-lease.
 func PushBranchWithLease(ctx context.Context, dir, branchName string) error {
-	return runGit(ctx, dir, "push", "origin", "--force-with-lease", branchName)
+	return PushBranchWithLeaseToRemote(ctx, dir, "origin", branchName)
+}
+
+// PushBranchToRemote pushes a branch to the named remote.
+func PushBranchToRemote(ctx context.Context, dir, remote, branchName string) error {
+	return runGit(ctx, dir, "push", remote, branchName)
+}
+
+// PushBranchWithLeaseToRemote pushes a branch with --force-with-lease.
+func PushBranchWithLeaseToRemote(ctx context.Context, dir, remote, branchName string) error {
+	return runGit(ctx, dir, "push", remote, "--force-with-lease", branchName)
 }
 
 // PushBranchWithLeaseCaptured pushes a branch with --force-with-lease without
 // writing output to the process stdout/stderr (safe for TUI callers).
 func PushBranchWithLeaseCaptured(ctx context.Context, dir, branchName string) error {
-	return runGitCaptured(ctx, dir, "push", "origin", "--force-with-lease", branchName)
+	return PushBranchWithLeaseCapturedToRemote(ctx, dir, "origin", branchName)
+}
+
+// PushBranchWithLeaseCapturedToRemote pushes a branch with --force-with-lease without
+// writing output to the process stdout/stderr (safe for TUI callers).
+func PushBranchWithLeaseCapturedToRemote(ctx context.Context, dir, remote, branchName string) error {
+	return runGitCaptured(ctx, dir, "push", remote, "--force-with-lease", branchName)
 }
 
 // PushBranchCaptured pushes a branch to origin without writing output to the
 // process stdout/stderr. Any git output is captured and included in errors.
 func PushBranchCaptured(ctx context.Context, dir, branchName string) error {
-	return runGitCaptured(ctx, dir, "push", "origin", branchName)
+	return PushBranchCapturedToRemote(ctx, dir, "origin", branchName)
+}
+
+// PushBranchCapturedToRemote pushes a branch to the named remote without writing output
+// to the process stdout/stderr. Any git output is captured and included in errors.
+func PushBranchCapturedToRemote(ctx context.Context, dir, remote, branchName string) error {
+	return runGitCaptured(ctx, dir, "push", remote, branchName)
 }
 
 // DeleteRemoteBranch deletes a branch from origin in the given repository.
@@ -99,6 +121,45 @@ func DeleteRemoteBranch(ctx context.Context, dir, branchName string) error {
 		return fmt.Errorf("branch name is empty")
 	}
 	return runGit(ctx, dir, "push", "origin", "--delete", branchName)
+}
+
+// EnsureRemote configures a named remote URL.
+//
+// If the remote already exists, the existing URL must match exactly.
+func EnsureRemote(ctx context.Context, dir, remoteName, remoteURL string) error {
+	remoteName = strings.TrimSpace(remoteName)
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteName == "" {
+		return fmt.Errorf("remote name is empty")
+	}
+	if remoteURL == "" {
+		return fmt.Errorf("remote URL is empty")
+	}
+
+	existing, err := runGitOutput(ctx, dir, "remote", "get-url", remoteName)
+	if err == nil {
+		if strings.TrimSpace(existing) == remoteURL {
+			return nil
+		}
+		return fmt.Errorf("remote %q exists with different URL %q", remoteName, strings.TrimSpace(existing))
+	}
+	if !strings.Contains(err.Error(), "No such remote") {
+		return fmt.Errorf("get remote %q url: %w", remoteName, err)
+	}
+	return runGit(ctx, dir, "remote", "add", remoteName, remoteURL)
+}
+
+// CheckGitRemoteReachable checks that the given remote URL responds to ls-remote.
+func CheckGitRemoteReachable(ctx context.Context, remoteURL, token string) error {
+	remoteURL = strings.TrimSpace(remoteURL)
+	if remoteURL == "" {
+		return fmt.Errorf("remote URL is empty")
+	}
+	authURL := injectToken(remoteURL, token)
+	if _, _, err := runGitOutputAndErr(ctx, "", "ls-remote", "--exit-code", authURL); err != nil {
+		return fmt.Errorf("check remote reachability: %w", err)
+	}
+	return nil
 }
 
 func injectToken(repoURL, token string) string {

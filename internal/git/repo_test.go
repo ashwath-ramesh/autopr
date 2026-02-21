@@ -77,6 +77,111 @@ func TestPushBranchCapturedIncludesStderrInError(t *testing.T) {
 	}
 }
 
+func TestPushBranchToRemoteWritesToNamedRemote(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	remote := filepath.Join(tmp, "remote.git")
+	runGitCmd(t, "", "init", "--bare", remote)
+
+	repo := filepath.Join(tmp, "repo")
+	runGitCmd(t, "", "init", repo)
+	runGitCmd(t, repo, "config", "user.email", "test@example.com")
+	runGitCmd(t, repo, "config", "user.name", "Test User")
+	runGitCmd(t, repo, "remote", "add", "upstream", remote)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGitCmd(t, repo, "add", "README.md")
+	runGitCmd(t, repo, "commit", "-m", "init")
+	runGitCmd(t, repo, "branch", "-M", "main")
+
+	destination := filepath.Join(tmp, "fork.git")
+	runGitCmd(t, "", "init", "--bare", destination)
+
+	if err := PushBranchToRemote(ctx, repo, "origin", "main"); err == nil {
+		t.Fatal("expected push to missing origin to fail")
+	}
+
+	if err := PushBranchToRemote(ctx, repo, "upstream", "main"); err != nil {
+		t.Fatalf("push to upstream: %v", err)
+	}
+	if err := PushBranchToRemote(ctx, repo, "origin", "main"); err == nil {
+		t.Fatal("expected push to missing origin to fail again")
+	}
+
+	if err := PushBranchToRemote(ctx, repo, "origin", "main"); err == nil {
+		// Sanity assert to ensure we actually touched destination remote config check.
+		t.Fatal("expected destination remote not added yet")
+	}
+
+	// Add destination as named remote and push there.
+	if err := PushBranchToRemote(ctx, repo, "destination", "main"); err == nil {
+		t.Fatal("expected push to destination to fail before remote exists")
+	}
+	runGitCmd(t, repo, "remote", "add", "destination", destination)
+	if err := PushBranchToRemote(ctx, repo, "destination", "main"); err != nil {
+		t.Fatalf("push to destination: %v", err)
+	}
+
+	out := runGitCmdOutput(t, "", "ls-remote", "--heads", destination, "main")
+	if !strings.Contains(out, "refs/heads/main") {
+		t.Fatalf("expected branch pushed to destination, got %q", out)
+	}
+}
+
+func TestEnsureRemoteAddsAndMatchesExistingURL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	remoteURL := filepath.Join(tmp, "origin.git")
+	repo := filepath.Join(tmp, "repo")
+	runGitCmd(t, "", "init", "--bare", remoteURL)
+	runGitCmd(t, "", "init", repo)
+
+	if err := EnsureRemote(ctx, repo, "origin", remoteURL); err != nil {
+		t.Fatalf("add origin remote: %v", err)
+	}
+	if err := EnsureRemote(ctx, repo, "origin", remoteURL); err != nil {
+		t.Fatalf("ensure matching origin remote: %v", err)
+	}
+}
+
+func TestEnsureRemoteRejectsDifferentURL(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+	remoteA := filepath.Join(tmp, "a.git")
+	remoteB := filepath.Join(tmp, "b.git")
+	repo := filepath.Join(tmp, "repo")
+	runGitCmd(t, "", "init", "--bare", remoteA)
+	runGitCmd(t, "", "init", "--bare", remoteB)
+	runGitCmd(t, "", "init", repo)
+	if err := runGitCmdOutputErr(t, repo, "remote", "add", "origin", remoteA); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if err := EnsureRemote(ctx, repo, "origin", remoteB); err == nil {
+		t.Fatalf("expected different URL error")
+	}
+}
+
+func TestCheckGitRemoteReachable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	tmp := t.TempDir()
+
+	remote := filepath.Join(tmp, "remote.git")
+	runGitCmd(t, "", "init", "--bare", remote)
+	if err := CheckGitRemoteReachable(ctx, remote, ""); err != nil {
+		t.Fatalf("expected reachable local remote: %v", err)
+	}
+	if err := CheckGitRemoteReachable(ctx, filepath.Join(tmp, "missing.git"), ""); err == nil {
+		t.Fatal("expected unreachable remote error")
+	}
+}
+
 func TestDeleteRemoteBranchSuccess(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -150,4 +255,27 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 	if err != nil {
 		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
 	}
+}
+
+func runGitCmdOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s failed: %v", strings.Join(args, " "), err)
+	}
+	return string(out)
+}
+
+func runGitCmdOutputErr(t *testing.T, dir string, args ...string) error {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	_, err := cmd.Output()
+	return err
 }
