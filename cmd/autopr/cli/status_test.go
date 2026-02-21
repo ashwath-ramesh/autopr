@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"autopr/internal/db"
 
@@ -326,6 +327,121 @@ func TestRunStatusJSONEmptyDBIncludesZeroCounts(t *testing.T) {
 	}
 }
 
+func TestRunStatusWatchFlagsParseAndValidate(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := writeStatusConfig(t, tmp)
+
+	prevStatusWatch := statusWatch
+	prevStatusInterval := statusInterval
+	t.Cleanup(func() {
+		statusWatch = prevStatusWatch
+		statusInterval = prevStatusInterval
+	})
+
+	cmd := &cobra.Command{}
+	cmd.Flags().BoolVar(&statusShort, "short", false, "")
+	cmd.Flags().BoolVar(&statusWatch, "watch", false, "")
+	cmd.Flags().DurationVar(&statusInterval, "interval", defaultWatchInterval, "")
+
+	if err := cmd.ParseFlags([]string{"--watch", "--interval", "25ms"}); err != nil {
+		t.Fatalf("parse status watch flags: %v", err)
+	}
+	if !statusWatch {
+		t.Fatalf("expected watch=true")
+	}
+	if statusInterval != 25*time.Millisecond {
+		t.Fatalf("expected interval=25ms, got %v", statusInterval)
+	}
+
+	cmd = &cobra.Command{}
+	cmd.Flags().BoolVar(&statusWatch, "watch", false, "")
+	cmd.Flags().DurationVar(&statusInterval, "interval", defaultWatchInterval, "")
+	if err := cmd.ParseFlags([]string{}); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if statusInterval != defaultWatchInterval {
+		t.Fatalf("expected default interval %v, got %v", defaultWatchInterval, statusInterval)
+	}
+
+	_, err := runStatusWithTestConfigResult(t, cfgPath, context.Background(), true, false, "--watch", "--interval", "0s")
+	if err == nil {
+		t.Fatalf("expected invalid interval error")
+	}
+	_, err = runStatusWithTestConfigResult(t, cfgPath, context.Background(), true, false, "--watch", "--interval", "-1s")
+	if err == nil {
+		t.Fatalf("expected negative interval error")
+	}
+}
+
+func TestRunStatusWatchJSONEmitsMultipleSnapshots(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "autopr.db")
+	cfgPath := writeStatusConfig(t, tmp)
+	seedStatusJobs(t, dbPath, []statusSeed{{state: "queued", count: 1}})
+
+	go func() {
+		time.AfterFunc(15*time.Millisecond, func() {
+			mutateStore, err := db.Open(dbPath)
+			if err != nil {
+				return
+			}
+			defer mutateStore.Close()
+			ctx := context.Background()
+			issueID, err := mutateStore.UpsertIssue(ctx, db.IssueUpsert{
+				ProjectName:   "project",
+				Source:        "github",
+				SourceIssueID: "issue-2",
+				Title:         "issue 2",
+				URL:           "https://example.com/2",
+				State:         "open",
+			})
+			if err != nil {
+				return
+			}
+			_, err = mutateStore.CreateJob(ctx, issueID, "project", 3)
+			if err != nil {
+				return
+			}
+		})
+	}()
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	out, err := runStatusWithTestConfigResult(t, cfgPath, runCtx, true, false, "--watch", "--interval", "20ms")
+	if err != nil {
+		t.Fatalf("run status watch: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected multiple snapshots, got %d lines: %q", len(lines), out)
+	}
+
+	seenQueuedOne := false
+	seenQueuedTwo := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var decoded statusJSONOutput
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			t.Fatalf("decode snapshot: %v", err)
+		}
+		if decoded.JobCounts["queued"] == 1 {
+			seenQueuedOne = true
+		}
+		if decoded.JobCounts["queued"] == 2 {
+			seenQueuedTwo = true
+		}
+	}
+	if !seenQueuedOne {
+		t.Fatalf("expected snapshot with one queued job")
+	}
+	if !seenQueuedTwo {
+		t.Fatalf("expected snapshot with two queued/active jobs after mutation")
+	}
+}
+
 func writeStatusConfig(t *testing.T, dir string) string {
 	t.Helper()
 	return writeStatusConfigWithPID(t, dir, filepath.Join(dir, "autopr.pid"))
@@ -398,27 +514,49 @@ func seedStatusJobs(t *testing.T, dbPath string, seeds []statusSeed) {
 }
 
 func runStatusWithTestConfig(t *testing.T, configPath string, asJSON bool, asShort bool) string {
+	out, err := runStatusWithTestConfigResult(t, configPath, context.Background(), asJSON, asShort)
+	if err != nil {
+		t.Fatalf("run status: %v", err)
+	}
+	return out
+}
+
+func runStatusWithTestConfigResult(t *testing.T, configPath string, ctx context.Context, asJSON bool, asShort bool, args ...string) (string, error) {
 	t.Helper()
 	prevCfgPath := cfgPath
 	prevJSON := jsonOut
 	prevShort := statusShort
+	prevWatch := statusWatch
+	prevInterval := statusInterval
 	cfgPath = configPath
 	jsonOut = asJSON
 	statusShort = asShort
+	statusWatch = false
+	statusInterval = defaultWatchInterval
 	t.Cleanup(func() {
 		cfgPath = prevCfgPath
 		jsonOut = prevJSON
 		statusShort = prevShort
+		statusWatch = prevWatch
+		statusInterval = prevInterval
 	})
 
 	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
-	return captureStdout(t, func() error {
+	cmd.Flags().BoolVar(&statusShort, "short", false, "print one-line status summary")
+	cmd.Flags().BoolVar(&statusWatch, "watch", false, "refresh output periodically")
+	cmd.Flags().DurationVar(&statusInterval, "interval", defaultWatchInterval, "refresh interval")
+	cmd.SetArgs(args)
+	if err := cmd.ParseFlags(args); err != nil {
+		return "", err
+	}
+	cmd.SetContext(ctx)
+	out, err := captureStdoutWithError(t, func() error {
 		return runStatus(cmd, nil)
 	})
+	return out, err
 }
 
-func captureStdout(t *testing.T, fn func() error) string {
+func captureStdoutWithError(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	prevStdout := os.Stdout
 	r, w, err := os.Pipe()
@@ -439,8 +577,13 @@ func captureStdout(t *testing.T, fn func() error) string {
 	if err := r.Close(); err != nil {
 		t.Fatalf("close read pipe: %v", err)
 	}
-	if runErr != nil {
-		t.Fatalf("run status: %v", runErr)
+	return string(out), runErr
+}
+
+func captureStdout(t *testing.T, fn func() error) string {
+	out, err := captureStdoutWithError(t, fn)
+	if err != nil {
+		t.Fatalf("run status: %v", err)
 	}
-	return string(out)
+	return out
 }

@@ -296,7 +296,8 @@ ap notify --test --json
 | `ap stop` | Gracefully stop the daemon |
 | `ap status` | Show daemon status and job counts |
 | `ap status --short` | Print one-line status summary |
-| `ap list [--project X] [--state Y] [--sort updated_at\|created_at\|state\|project] [--asc\|--desc] [--page N] [--page-size M] [--all]` | List jobs with optional filters, sorting, and pagination |
+| `ap status --watch [--interval 5s]` | Refresh status output every interval until interrupted |
+| `ap list [--project X] [--state Y] [--sort updated_at\|created_at\|state\|project] [--asc\|--desc] [--page N] [--page-size M] [--all] [--watch] [--interval 5s]` | List jobs with optional filters, sorting, and pagination; optional watch mode |
 | `ap issues [--project X] [--eligible|--ineligible]` | List synced issues and eligibility |
 | `ap logs <job-id>` | Show LLM output, artifacts, and tokens. Use `--session <index|id>`, `--show-input`, and/or `--show-output` for per-session text |
 | `ap approve <job-id>` | Approve a job and create PR |
@@ -326,6 +327,10 @@ ap status --short
 running | 3 queued, 2 active
 ```
 `ap start` checks for new releases at most once every 24h and prints a non-blocking upgrade notice when available.
+`--watch` switches `ap list` and `ap status` into periodic refresh mode.
+Refresh interval defaults to `5s` and can be set with `--interval` using duration syntax (`5s`, `2s`, `500ms`).
+With `--watch --json`, each refresh emits one compact JSON object per line, suitable for streaming parsers.
+Non-watch output behavior is unchanged when `--watch` is not set.
 On macOS with `ap service install`, `ap stop` sends `SIGTERM` but launchd `KeepAlive` may restart it; run `ap service uninstall` to fully disable auto-start/restart.
 
 ### 6.1 Job ID Prefix Matching
