@@ -21,22 +21,11 @@ type runPathsJSON struct {
 
 func TestRunPathsJSONOutput(t *testing.T) {
 	tmp := t.TempDir()
-
-	cfgPath := filepath.Join(tmp, "autopr.toml")
 	dbPath := filepath.Join(tmp, "custom-autopr.db")
 	reposPath := filepath.Join(tmp, "custom-repos")
 	logPath := filepath.Join(tmp, "custom.log")
 	pidPath := filepath.Join(tmp, "autopr.pid")
-	cfg := fmt.Sprintf(`db_path = %q
-repos_root = %q
-log_file = %q
-
-[daemon]
-pid_file = %q
-`, dbPath, reposPath, logPath, pidPath)
-	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
+	cfgPath := writePathsConfig(t, tmp, dbPath, reposPath, logPath, pidPath)
 
 	out := runPathsWithTestConfig(t, cfgPath, true)
 	var got runPathsJSON
@@ -68,9 +57,16 @@ pid_file = %q
 	if got.Log != logPath {
 		t.Fatalf("log: expected %q, got %q", logPath, got.Log)
 	}
-	if got.DB == "" || got.Repos == "" || got.Log == "" {
-		t.Fatalf("expected resolved db, repos, and log values in JSON output")
+	if got.DB == "" {
+		t.Fatalf("expected db path in JSON output")
 	}
+	if got.Repos == "" {
+		t.Fatalf("expected repos path in JSON output")
+	}
+	if got.Log == "" {
+		t.Fatalf("expected log path in JSON output")
+	}
+}
 }
 
 func TestRunPathsJSONWithoutConfig(t *testing.T) {
@@ -99,6 +95,10 @@ func TestRunPathsJSONWithoutConfig(t *testing.T) {
 	}
 	if got["db"] != "" || got["repos"] != "" || got["log"] != "" {
 		t.Fatalf("expected empty db, repos, and log when config is unavailable")
+	}
+
+	if _, ok := got["state"]; ok {
+		t.Fatalf("JSON output should not include \"state\"")
 	}
 }
 
@@ -153,4 +153,29 @@ func runPathsWithTestConfig(t *testing.T, path string, asJSON bool) string {
 	return captureStdout(t, func() error {
 		return runPaths(nil, nil)
 	})
+}
+
+func writePathsConfig(t *testing.T, dir, dbPath, reposPath, logPath, pidPath string) string {
+	t.Helper()
+	cfgPath := filepath.Join(dir, "autopr.toml")
+	cfg := fmt.Sprintf(`db_path = %q
+repos_root = %q
+log_file = %q
+
+[daemon]
+pid_file = %q
+
+[[projects]]
+name = "project"
+repo_url = "https://github.com/acmecorp/placeholder"
+test_cmd = "echo ok"
+
+[projects.github]
+owner = "acmecorp"
+repo = "placeholder"
+`, dbPath, reposPath, logPath, pidPath)
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return cfgPath
 }
