@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -85,9 +86,9 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		}
 		out.Path = worktreePath
 	case "issue":
-		issueURL := strings.TrimSpace(job.IssueURL)
-		if issueURL == "" {
-			return fmt.Errorf("job %s has no issue URL", jobID)
+		issueURL, err := resolveOpenIssueURL(cmd.Context(), store, job.ID, job.AutoPRIssueID)
+		if err != nil {
+			return err
 		}
 		if err := runOpenInBrowser(issueURL); err != nil {
 			return fmt.Errorf("open issue URL: %w", err)
@@ -110,6 +111,25 @@ func runOpen(cmd *cobra.Command, args []string) error {
 		printJSON(out)
 	}
 	return nil
+}
+
+func resolveOpenIssueURL(ctx context.Context, store *db.Store, jobID, issueID string) (string, error) {
+	issueID = strings.TrimSpace(issueID)
+	if issueID == "" {
+		return "", fmt.Errorf("job %s has no issue URL", jobID)
+	}
+
+	issue, err := store.GetIssueByAPID(ctx, issueID)
+	if err != nil {
+		return "", fmt.Errorf("load issue for job %s: %w", jobID, err)
+	}
+
+	issueURL := strings.TrimSpace(issue.URL)
+	if issueURL == "" {
+		return "", fmt.Errorf("job %s has no issue URL", jobID)
+	}
+
+	return issueURL, nil
 }
 
 func resolveOpenTarget() (string, error) {
