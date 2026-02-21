@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"autopr/internal/cost"
 	"autopr/internal/db"
@@ -20,6 +22,8 @@ var (
 	listPage     int
 	listPageSize int
 	listAll      bool
+	listWatch    bool
+	listInterval time.Duration
 )
 
 var listCmd = &cobra.Command{
@@ -38,6 +42,8 @@ func init() {
 	listCmd.Flags().IntVar(&listPage, "page", 1, "page number (1-based)")
 	listCmd.Flags().IntVar(&listPageSize, "page-size", 20, "number of rows per page")
 	listCmd.Flags().BoolVar(&listAll, "all", false, "disable pagination and show full output")
+	listCmd.Flags().BoolVar(&listWatch, "watch", false, "refresh output periodically")
+	listCmd.Flags().DurationVar(&listInterval, "interval", defaultWatchInterval, "refresh interval (e.g. 5s, 2s, 500ms)")
 	rootCmd.AddCommand(listCmd)
 }
 
@@ -68,13 +74,50 @@ func runList(cmd *cobra.Command, args []string) error {
 	paginate := !listAll && (cmd.Flags().Changed("page") || cmd.Flags().Changed("page-size"))
 	page := listPage
 	pageSize := listPageSize
+	snapshot := func(ctx context.Context) (listSnapshot, error) {
+		return collectListSnapshot(ctx, store, listProject, state, sortBy, ascending, paginate, page, pageSize, listCost)
+	}
 
+	render := func(ctx context.Context, snapshot listSnapshot, iteration int64) error {
+		return renderListSnapshot(ctx, jsonOut, listWatch, iteration, snapshot, listCost)
+	}
+
+	if listWatch {
+		if listInterval <= 0 {
+			return fmt.Errorf("invalid interval %v; expected > 0", listInterval)
+		}
+		return runWatchLoop(cmd.Context(), listInterval, func(ctx context.Context, iteration int64) error {
+			s, err := snapshot(ctx)
+			if err != nil {
+				return err
+			}
+			return render(ctx, s, iteration)
+		})
+	}
+
+	s, err := snapshot(cmd.Context())
+	if err != nil {
+		return err
+	}
+	return render(cmd.Context(), s, 0)
+}
+
+type listSnapshot struct {
+	Jobs     []db.Job
+	Total    int
+	Page     int
+	PageSize int
+	Paginate bool
+	Cost     map[string]db.TokenSummary
+}
+
+func collectListSnapshot(ctx context.Context, store *db.Store, project, state, sortBy string, ascending bool, paginate bool, page int, pageSize int, withCost bool) (listSnapshot, error) {
 	if paginate {
 		if page < 1 {
-			return fmt.Errorf("invalid page value %d; expected >= 1", page)
+			return listSnapshot{}, fmt.Errorf("invalid page value %d; expected >= 1", page)
 		}
 		if pageSize < 1 {
-			return fmt.Errorf("invalid page-size value %d; expected >= 1", pageSize)
+			return listSnapshot{}, fmt.Errorf("invalid page-size value %d; expected >= 1", pageSize)
 		}
 	}
 
@@ -82,94 +125,132 @@ func runList(cmd *cobra.Command, args []string) error {
 	total := 0
 	if paginate {
 		var err error
-		jobs, total, err = store.ListJobsPage(cmd.Context(), listProject, state, sortBy, ascending, page, pageSize)
+		jobs, total, err = store.ListJobsPage(ctx, project, state, sortBy, ascending, page, pageSize)
 		if err != nil {
-			return err
+			return listSnapshot{}, err
 		}
 	} else {
 		var err error
-		jobs, err = store.ListJobs(cmd.Context(), listProject, state, sortBy, ascending)
+		jobs, err = store.ListJobs(ctx, project, state, sortBy, ascending)
 		if err != nil {
-			return err
+			return listSnapshot{}, err
 		}
 	}
 
-	if jsonOut {
-		if paginate {
-			printJSON(struct {
+	// Optionally fetch cost data.
+	var costMap map[string]db.TokenSummary
+	if withCost && len(jobs) > 0 {
+		ids := make([]string, len(jobs))
+		for i, j := range jobs {
+			ids[i] = j.ID
+		}
+		costMap, _ = store.AggregateTokensForJobs(ctx, ids)
+	}
+
+	return listSnapshot{
+		Jobs:     jobs,
+		Total:    total,
+		Page:     page,
+		PageSize: pageSize,
+		Paginate: paginate,
+		Cost:     costMap,
+	}, nil
+}
+
+func renderListSnapshot(_ context.Context, asJSON bool, compactJSON bool, iteration int64, snapshot listSnapshot, showCost bool) error {
+	if asJSON {
+		if compactJSON {
+			payload := struct {
+				Jobs      []db.Job `json:"jobs"`
+				Page      int      `json:"page"`
+				PageSize  int      `json:"page_size"`
+				Total     int      `json:"total"`
+				Iteration int64    `json:"iteration"`
+			}{
+				Jobs:      snapshot.Jobs,
+				Iteration: iteration,
+			}
+			if snapshot.Paginate {
+				payload.Page = snapshot.Page
+				payload.PageSize = snapshot.PageSize
+				payload.Total = snapshot.Total
+			} else {
+				payload.Total = len(snapshot.Jobs)
+			}
+			return writeJSONLine(payload)
+		}
+		if snapshot.Paginate {
+			payload := struct {
 				Jobs     []db.Job `json:"jobs"`
 				Page     int      `json:"page"`
 				PageSize int      `json:"page_size"`
 				Total    int      `json:"total"`
 			}{
-				Jobs:     jobs,
-				Page:     page,
-				PageSize: pageSize,
-				Total:    total,
-			})
+				Jobs:     snapshot.Jobs,
+				Page:     snapshot.Page,
+				PageSize: snapshot.PageSize,
+				Total:    snapshot.Total,
+			}
+			printJSON(payload)
 			return nil
 		}
-		printJSON(jobs)
+		printJSON(snapshot.Jobs)
 		return nil
 	}
 
-	if paginate {
+	if snapshot.Paginate {
 		pages := 0
-		if total > 0 {
-			pages = (total + pageSize - 1) / pageSize
+		if snapshot.Total > 0 {
+			pages = (snapshot.Total + snapshot.PageSize - 1) / snapshot.PageSize
 		}
-		fmt.Printf("Page %d/%d, total rows: %d\n", page, pages, total)
-	}
-
-	if len(jobs) == 0 && !paginate {
-		fmt.Println("No jobs found. Run 'ap start' to begin processing issues.")
-		return nil
-	}
-
-	// Optionally fetch cost data.
-	var costMap map[string]db.TokenSummary
-	if listCost && len(jobs) > 0 {
-		ids := make([]string, len(jobs))
-		for i, j := range jobs {
-			ids[i] = j.ID
+		if err := writef("Page %d/%d, total rows: %d\n", snapshot.Page, pages, snapshot.Total); err != nil {
+			return err
 		}
-		costMap, _ = store.AggregateTokensForJobs(cmd.Context(), ids)
 	}
 
-	if listCost {
-		fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-8s %-45s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "RETRY", "COST", "ISSUE", "UPDATED")
-		fmt.Println(strings.Repeat("-", 136))
-	} else {
-		fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-55s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "RETRY", "ISSUE", "UPDATED")
-		fmt.Println(strings.Repeat("-", 136))
+	if len(snapshot.Jobs) == 0 && !snapshot.Paginate {
+		return writef("No jobs found. Run 'ap start' to begin processing issues.\n")
 	}
 
-	total = len(jobs)
+	if showCost {
+		if err := writef("%-10s %-20s %-13s %-13s %-5s %-8s %-45s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "RETRY", "COST", "ISSUE", "UPDATED"); err != nil {
+			return err
+		}
+	} else if err := writef("%-10s %-20s %-13s %-13s %-5s %-55s %s\n", "JOB", "STATE", "PROJECT", "SOURCE", "RETRY", "ISSUE", "UPDATED"); err != nil {
+		return err
+	}
+	if err := writef("%s\n", strings.Repeat("-", 136)); err != nil {
+		return err
+	}
+	total := len(snapshot.Jobs)
 	queued, active, failed, merged := 0, 0, 0, 0
-
-	for _, j := range jobs {
+	for _, j := range snapshot.Jobs {
 		source := ""
 		if j.IssueSource != "" && j.SourceIssueID != "" {
 			source = fmt.Sprintf("%s #%s", capitalize(j.IssueSource), j.SourceIssueID)
 		}
 
-		if listCost {
+		if showCost {
 			costStr := "-"
-			if ts, ok := costMap[j.ID]; ok && ts.SessionCount > 0 {
+			if ts, ok := snapshot.Cost[j.ID]; ok && ts.SessionCount > 0 {
 				c := cost.Calculate(ts.Provider, ts.TotalInputTokens, ts.TotalOutputTokens)
 				costStr = cost.FormatUSD(c)
 			}
 			title := truncate(j.IssueTitle, 45)
-			fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-8s %-45s %s\n",
+			if err := writef("%-10s %-20s %-13s %-13s %-5s %-8s %-45s %s\n",
 				db.ShortID(j.ID), db.DisplayState(j.State, j.PRMergedAt, j.PRClosedAt), truncate(j.ProjectName, 12), source,
 				fmt.Sprintf("%d/%d", j.Iteration, j.MaxIterations),
-				costStr, title, j.UpdatedAt)
+				costStr, title, j.UpdatedAt); err != nil {
+				return err
+			}
 		} else {
 			title := truncate(j.IssueTitle, 55)
-			fmt.Printf("%-10s %-20s %-13s %-13s %-5s %-55s %s\n",
+			if err := writef("%-10s %-20s %-13s %-13s %-5s %-55s %s\n",
 				db.ShortID(j.ID), db.DisplayState(j.State, j.PRMergedAt, j.PRClosedAt), truncate(j.ProjectName, 12), source,
 				fmt.Sprintf("%d/%d", j.Iteration, j.MaxIterations),
-				title, j.UpdatedAt)
+				title, j.UpdatedAt); err != nil {
+				return err
+			}
 		}
 
 		if j.State == "queued" {
@@ -186,8 +267,7 @@ func runList(cmd *cobra.Command, args []string) error {
 			merged++
 		}
 	}
-	fmt.Printf("Total: %d jobs (%d queued, %d active, %d failed, %d merged)\n", total, queued, active, failed, merged)
-	return nil
+	return writef("Total: %d jobs (%d queued, %d active, %d failed, %d merged)\n", total, queued, active, failed, merged)
 }
 
 func normalizeListSort(sortBy string) (string, error) {

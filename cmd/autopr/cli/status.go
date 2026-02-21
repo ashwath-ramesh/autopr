@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"autopr/internal/db"
 
 	"github.com/spf13/cobra"
 )
@@ -59,10 +63,14 @@ var statusCmd = &cobra.Command{
 }
 
 var statusShort bool
+var statusWatch bool
+var statusInterval time.Duration
 
 func init() {
 	rootCmd.AddCommand(statusCmd)
 	statusCmd.Flags().BoolVar(&statusShort, "short", false, "print one-line status summary")
+	statusCmd.Flags().BoolVar(&statusWatch, "watch", false, "refresh output periodically")
+	statusCmd.Flags().DurationVar(&statusInterval, "interval", defaultWatchInterval, "refresh interval (e.g. 5s, 2s, 500ms)")
 }
 
 func renderShortStatusSummary(running bool, queued int, active int) string {
@@ -79,10 +87,44 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	store, err := openStore(cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+
+	render := func(ctx context.Context, asJSON bool, asShort bool) error {
+		snapshot, err := collectStatusSnapshot(ctx, store, cfg.Daemon.PIDFile)
+		if err != nil {
+			return err
+		}
+		return renderStatusSnapshot(asJSON, asShort, statusWatch, snapshot)
+	}
+	if statusWatch {
+		if statusInterval <= 0 {
+			return fmt.Errorf("invalid interval %v; expected > 0", statusInterval)
+		}
+		return runWatchLoop(cmd.Context(), statusInterval, func(ctx context.Context, _ int64) error {
+			return render(ctx, jsonOut, statusShort)
+		})
+	}
+
+	return render(cmd.Context(), jsonOut, statusShort)
+}
+
+type statusSnapshot struct {
+	Running bool
+	PID     string
+	Counts  statusJobCounts
+	Queued  int
+	Active  int
+}
+
+func collectStatusSnapshot(ctx context.Context, store *db.Store, pidFile string) (statusSnapshot, error) {
 	// Check daemon running.
 	running := false
 	pidStr := ""
-	pidBytes, err := os.ReadFile(cfg.Daemon.PIDFile)
+	pidBytes, err := os.ReadFile(pidFile)
 	if err == nil {
 		pidStr = strings.TrimSpace(string(pidBytes))
 		pid, err := strconv.Atoi(pidStr)
@@ -95,20 +137,10 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	store, err := openStore(cfg)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-
 	// Count jobs by state.
-	type stateCount struct {
-		State string
-		Count int
-	}
-	rows, err := store.Reader.QueryContext(cmd.Context(), `SELECT state, COUNT(*) FROM jobs GROUP BY state`)
+	rows, err := store.Reader.QueryContext(ctx, `SELECT state, COUNT(*) FROM jobs GROUP BY state`)
 	if err != nil {
-		return fmt.Errorf("count jobs: %w", err)
+		return statusSnapshot{}, fmt.Errorf("count jobs: %w", err)
 	}
 	defer rows.Close()
 
@@ -124,56 +156,76 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		"cancelled":    0,
 		"rejected":     0,
 	}
+	type stateCount struct {
+		State string
+		Count int
+	}
 	for rows.Next() {
 		var sc stateCount
 		if err := rows.Scan(&sc.State, &sc.Count); err != nil {
-			return err
+			return statusSnapshot{}, err
 		}
 		counts[sc.State] = sc.Count
 	}
 
 	// Count merged separately (approved jobs with pr_merged_at set).
 	var merged int
-	_ = store.Reader.QueryRowContext(cmd.Context(),
+	_ = store.Reader.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM jobs WHERE state = 'approved' AND pr_merged_at IS NOT NULL AND pr_merged_at != ''`).Scan(&merged)
 	prCreated := counts["approved"] - merged
 	if prCreated < 0 {
 		prCreated = 0
 	}
-	jobCounts := statusJobCounts{
-		Queued:       counts["queued"],
-		Planning:     counts["planning"],
-		Implementing: counts["implementing"],
-		Reviewing:    counts["reviewing"],
-		Testing:      counts["testing"],
-		NeedsPR:      counts["ready"],
-		Failed:       counts["failed"],
-		Cancelled:    counts["cancelled"],
-		Rejected:     counts["rejected"],
-		PRCreated:    prCreated,
-		Merged:       merged,
-	}
 	active := counts["planning"] + counts["implementing"] + counts["reviewing"] + counts["testing"] + counts["rebasing"] + counts["resolving_conflicts"]
+	return statusSnapshot{
+		Running: running,
+		PID:     pidStr,
+		Counts: statusJobCounts{
+			Queued:       counts["queued"],
+			Planning:     counts["planning"],
+			Implementing: counts["implementing"],
+			Reviewing:    counts["reviewing"],
+			Testing:      counts["testing"],
+			NeedsPR:      counts["ready"],
+			Failed:       counts["failed"],
+			Cancelled:    counts["cancelled"],
+			Rejected:     counts["rejected"],
+			PRCreated:    prCreated,
+			Merged:       merged,
+		},
+		Queued: counts["queued"],
+		Active: active,
+	}, nil
+}
 
-	if jsonOut {
-		printJSON(statusOutput{
-			Running:   running,
-			PID:       pidStr,
-			JobCounts: jobCounts,
-		})
+func renderStatusSnapshot(asJSON bool, asShort bool, compactJSON bool, snapshot statusSnapshot) error {
+	if asJSON {
+		output := statusOutput{
+			Running:   snapshot.Running,
+			PID:       snapshot.PID,
+			JobCounts: snapshot.Counts,
+		}
+		if compactJSON {
+			return writeJSONLine(output)
+		}
+		printJSON(output)
 		return nil
 	}
 
-	if statusShort {
-		fmt.Println(renderShortStatusSummary(running, counts["queued"], active))
-		return nil
+	if asShort {
+		return writef("%s\n", renderShortStatusSummary(snapshot.Running, snapshot.Queued, snapshot.Active))
 	}
 
-	if running {
-		fmt.Printf("Daemon: running (PID %s)\n", pidStr)
+	if snapshot.Running {
+		if err := writef("Daemon: running (PID %s)\n", snapshot.PID); err != nil {
+			return err
+		}
 	} else {
-		fmt.Println("Daemon: stopped")
+		if err := writef("Daemon: stopped\n"); err != nil {
+			return err
+		}
 	}
+
 	sections := []struct {
 		title  string
 		values []statusSectionEntry
@@ -181,33 +233,33 @@ func runStatus(cmd *cobra.Command, args []string) error {
 		{
 			title: "Pipeline",
 			values: []statusSectionEntry{
-				{label: "queued", count: counts["queued"]},
-				{label: "active", count: active},
+				{label: "queued", count: snapshot.Queued},
+				{label: "active", count: snapshot.Active},
 			},
 		},
 		{
 			title: "Active",
 			values: []statusSectionEntry{
-				{label: "planning", count: counts["planning"]},
-				{label: "implementing", count: counts["implementing"]},
-				{label: "reviewing", count: counts["reviewing"]},
-				{label: "testing", count: counts["testing"]},
+				{label: "planning", count: snapshot.Counts.Planning},
+				{label: "implementing", count: snapshot.Counts.Implementing},
+				{label: "reviewing", count: snapshot.Counts.Reviewing},
+				{label: "testing", count: snapshot.Counts.Testing},
 			},
 		},
 		{
 			title: "Output",
 			values: []statusSectionEntry{
-				{label: "needs_pr", count: counts["ready"]},
-				{label: "merged", count: merged},
-				{label: "pr_created", count: prCreated},
+				{label: "needs_pr", count: snapshot.Counts.NeedsPR},
+				{label: "merged", count: snapshot.Counts.Merged},
+				{label: "pr_created", count: snapshot.Counts.PRCreated},
 			},
 		},
 		{
 			title: "Problems",
 			values: []statusSectionEntry{
-				{label: "failed", count: counts["failed"]},
-				{label: "rejected", count: counts["rejected"]},
-				{label: "cancelled", count: counts["cancelled"]},
+				{label: "failed", count: snapshot.Counts.Failed},
+				{label: "rejected", count: snapshot.Counts.Rejected},
+				{label: "cancelled", count: snapshot.Counts.Cancelled},
 			},
 		},
 	}
@@ -219,11 +271,14 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			sectionLines = append(sectionLines, line)
 		}
 	}
-
 	if len(sectionLines) > 0 {
-		fmt.Println()
+		if err := writef("\n"); err != nil {
+			return err
+		}
 		for _, line := range sectionLines {
-			fmt.Println(line)
+			if err := writef("%s\n", line); err != nil {
+				return err
+			}
 		}
 	}
 

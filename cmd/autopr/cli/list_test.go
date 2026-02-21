@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"autopr/internal/db"
 
@@ -292,6 +293,156 @@ func TestRunListRejectsConflictingDirectionFlags(t *testing.T) {
 	}
 }
 
+func TestRunListWatchFlagEnablesWatchMode(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := writeStatusConfig(t, tmp)
+
+	prevWatch := listWatch
+	prevInterval := listInterval
+	defer func() {
+		listWatch = prevWatch
+		listInterval = prevInterval
+	}()
+
+	cmd := &cobra.Command{}
+	cmd.Flags().BoolVar(&listWatch, "watch", false, "")
+	cmd.Flags().DurationVar(&listInterval, "interval", defaultWatchInterval, "")
+
+	cmd.SetArgs([]string{"--watch", "--interval", "20ms"})
+	if err := cmd.ParseFlags([]string{"--watch", "--interval", "20ms"}); err != nil {
+		t.Fatalf("parse list watch flags: %v", err)
+	}
+
+	if !listWatch {
+		t.Fatalf("expected watch=true")
+	}
+	if listInterval != 20*time.Millisecond {
+		t.Fatalf("expected interval=20ms, got %v", listInterval)
+	}
+
+	cmd = &cobra.Command{}
+	cmd.Flags().BoolVar(&listWatch, "watch", false, "")
+	cmd.Flags().DurationVar(&listInterval, "interval", defaultWatchInterval, "")
+	if err := cmd.ParseFlags([]string{}); err != nil {
+		t.Fatalf("parse defaults: %v", err)
+	}
+	if listInterval != defaultWatchInterval {
+		t.Fatalf("expected default interval %v, got %v", defaultWatchInterval, listInterval)
+	}
+
+	if _, err := runListWithTestConfigPaginationErrorWithContext(t, cfg, context.Background(), true, "--watch", "--interval", "0s"); err == nil {
+		t.Fatalf("expected invalid interval error")
+	}
+	if _, err := runListWithTestConfigPaginationErrorWithContext(t, cfg, context.Background(), true, "--watch", "--interval", "-1s"); err == nil {
+		t.Fatalf("expected negative interval error")
+	}
+}
+
+func TestRunListWatchEmitsMultipleJSONSnapshots(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := writeStatusConfig(t, tmp)
+	dbPath := filepath.Join(tmp, "autopr.db")
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if _, err := seedListWatchJob(ctx, store, "queued", "issue-1"); err != nil {
+		t.Fatalf("seed first job: %v", err)
+	}
+
+	time.AfterFunc(15*time.Millisecond, func() {
+		mutateStore, err := db.Open(dbPath)
+		if err != nil {
+			return
+		}
+		defer mutateStore.Close()
+		if _, err := seedListWatchJob(context.Background(), mutateStore, "planning", "issue-2"); err != nil {
+			return
+		}
+	})
+
+	runCtx, cancel := context.WithTimeout(context.Background(), 110*time.Millisecond)
+	defer cancel()
+	out, err := runListWithTestConfigPaginationErrorWithContext(t, cfg, runCtx, true, "--watch", "--interval", "20ms")
+	if err != nil {
+		t.Fatalf("run list watch: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected multiple snapshots, got %d lines: %q", len(lines), out)
+	}
+
+	type watchPayload struct {
+		Jobs      []db.Job `json:"jobs"`
+		Iteration int64   `json:"iteration"`
+	}
+	var seenIteration bool
+	hadOne := false
+	hadTwo := false
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("decode raw snapshot line %q: %v", line, err)
+		}
+		if _, ok := raw["jobs"]; !ok {
+			t.Fatalf("missing \"jobs\" field: %q", line)
+		}
+		if _, ok := raw["iteration"]; !ok {
+			t.Fatalf("missing \"iteration\" field: %q", line)
+		} else {
+			seenIteration = true
+		}
+		var payload watchPayload
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("decode snapshot line %q: %v", line, err)
+		}
+		if len(payload.Jobs) == 1 {
+			hadOne = true
+		}
+		if len(payload.Jobs) >= 2 {
+			hadTwo = true
+		}
+	}
+	if !hadOne {
+		t.Fatalf("expected snapshot with one job, got %d lines", len(lines))
+	}
+	if !hadTwo {
+		t.Fatalf("expected snapshot with two jobs after mutation, got %d lines", len(lines))
+	}
+	if !seenIteration {
+		t.Fatalf("expected iteration field in snapshots")
+	}
+}
+
+func seedListWatchJob(ctx context.Context, store *db.Store, state, source string) (string, error) {
+	issueID, err := store.UpsertIssue(ctx, db.IssueUpsert{
+		ProjectName:   "project",
+		Source:        "github",
+		SourceIssueID: source,
+		Title:         source,
+		URL:           "https://example.com/" + source,
+		State:         "open",
+	})
+	if err != nil {
+		return "", err
+	}
+	jobID, err := store.CreateJob(ctx, issueID, "project", 3)
+	if err != nil {
+		return "", err
+	}
+	if _, err := store.Writer.ExecContext(ctx, `UPDATE jobs SET state = ? WHERE id = ?`, state, jobID); err != nil {
+		return "", err
+	}
+	return jobID, nil
+}
+
 // Pagination tests
 
 func TestRunListPaginationFirstPage(t *testing.T) {
@@ -480,6 +631,8 @@ func runListWithTestConfigWithOptionsResult(t *testing.T, configPath string, asJ
 	t.Helper()
 	prevCfgPath := cfgPath
 	prevJSON := jsonOut
+	prevWatch := listWatch
+	prevInterval := listInterval
 	prevProject := listProject
 	prevState := listState
 	prevSort := listSort
@@ -492,6 +645,8 @@ func runListWithTestConfigWithOptionsResult(t *testing.T, configPath string, asJ
 	t.Cleanup(func() {
 		cfgPath = prevCfgPath
 		jsonOut = prevJSON
+		listWatch = prevWatch
+		listInterval = prevInterval
 		listProject = prevProject
 		listState = prevState
 		listSort = prevSort
@@ -513,6 +668,8 @@ func runListWithTestConfigWithOptionsResult(t *testing.T, configPath string, asJ
 	cmd.Flags().IntVar(&listPage, "page", 1, "page number (1-based)")
 	cmd.Flags().IntVar(&listPageSize, "page-size", 20, "number of rows per page")
 	cmd.Flags().BoolVar(&listAll, "all", false, "disable pagination and show full output")
+	cmd.Flags().BoolVar(&listWatch, "watch", false, "refresh output periodically")
+	cmd.Flags().DurationVar(&listInterval, "interval", defaultWatchInterval, "refresh interval")
 
 	// Set globals AFTER flag registration (which resets them to defaults).
 	cfgPath = configPath
@@ -526,6 +683,8 @@ func runListWithTestConfigWithOptionsResult(t *testing.T, configPath string, asJ
 	listPage = 1
 	listPageSize = 20
 	listAll = false
+	listWatch = false
+	listInterval = defaultWatchInterval
 	cmd.SetContext(context.Background())
 
 	return captureStdoutWithError(t, func() error {
@@ -542,9 +701,15 @@ func runListWithTestConfigPagination(t *testing.T, configPath string, asJSON boo
 }
 
 func runListWithTestConfigPaginationError(t *testing.T, configPath string, asJSON bool, args ...string) (string, error) {
+	return runListWithTestConfigPaginationErrorWithContext(t, configPath, context.Background(), asJSON, args...)
+}
+
+func runListWithTestConfigPaginationErrorWithContext(t *testing.T, configPath string, ctx context.Context, asJSON bool, args ...string) (string, error) {
 	t.Helper()
 	prevCfgPath := cfgPath
 	prevJSON := jsonOut
+	prevWatch := listWatch
+	prevInterval := listInterval
 	prevProject := listProject
 	prevState := listState
 	prevSort := listSort
@@ -569,6 +734,8 @@ func runListWithTestConfigPaginationError(t *testing.T, configPath string, asJSO
 	t.Cleanup(func() {
 		cfgPath = prevCfgPath
 		jsonOut = prevJSON
+		listWatch = prevWatch
+		listInterval = prevInterval
 		listProject = prevProject
 		listState = prevState
 		listSort = prevSort
@@ -590,11 +757,13 @@ func runListWithTestConfigPaginationError(t *testing.T, configPath string, asJSO
 	cmd.Flags().IntVar(&listPage, "page", 1, "page number (1-based)")
 	cmd.Flags().IntVar(&listPageSize, "page-size", 20, "number of rows per page")
 	cmd.Flags().BoolVar(&listAll, "all", false, "disable pagination and show full output")
+	cmd.Flags().BoolVar(&listWatch, "watch", false, "refresh output periodically")
+	cmd.Flags().DurationVar(&listInterval, "interval", defaultWatchInterval, "refresh interval")
 	cmd.SetArgs(args)
 	if err := cmd.ParseFlags(args); err != nil {
 		return "", err
 	}
-	cmd.SetContext(context.Background())
+	cmd.SetContext(ctx)
 
 	prevStdout := os.Stdout
 	r, w, err := os.Pipe()
@@ -768,28 +937,4 @@ func slicesEqual(a, b []string) bool {
 		}
 	}
 	return true
-}
-
-func captureStdoutWithError(t *testing.T, fn func() error) (string, error) {
-	t.Helper()
-	prevStdout := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("create pipe: %v", err)
-	}
-	os.Stdout = w
-	runErr := fn()
-	if err := w.Close(); err != nil {
-		t.Fatalf("close write pipe: %v", err)
-	}
-	os.Stdout = prevStdout
-
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read stdout: %v", err)
-	}
-	if err := r.Close(); err != nil {
-		t.Fatalf("close read pipe: %v", err)
-	}
-	return strings.TrimSpace(string(out)), runErr
 }
