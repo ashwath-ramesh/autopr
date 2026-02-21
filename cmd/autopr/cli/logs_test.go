@@ -33,14 +33,14 @@ func TestResolveLogsSessionByIndex(t *testing.T) {
 func TestResolveLogsSessionByID(t *testing.T) {
 	sessions := []db.LLMSession{
 		{ID: 101, JobID: "job-1"},
-		{ID: 202, JobID: "job-1"},
+		{ID: 1203, JobID: "job-1"},
 	}
 
-	session, err := resolveLogsSession(sessions, "202", "job-1")
+	session, err := resolveLogsSession(sessions, "1203", "job-1")
 	if err != nil {
 		t.Fatalf("resolveLogsSession(id): unexpected error: %v", err)
 	}
-	if got, want := session.ID, 202; got != want {
+	if got, want := session.ID, 1203; got != want {
 		t.Fatalf("resolveLogsSession(id): expected %d, got %d", want, got)
 	}
 }
@@ -91,6 +91,31 @@ func TestResolveLogsOutputMode(t *testing.T) {
 				t.Fatalf("resolveLogsOutputMode(%v, %v): expected %s, got %s", tc.showInput, tc.showOutput, tc.want, got)
 			}
 		})
+	}
+}
+
+func TestRunLogsSessionIDOutOfIndexRange(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := writeLogsConfig(t, tmp)
+	dbPath := filepath.Join(tmp, "autopr.db")
+
+	jobID, sessions := seedLogsJobForTestWithSessionIDs(t, dbPath, 101, 1203)
+	if err := completeLogSessionFixtures(t, dbPath, sessions[0], sessions[1]); err != nil {
+		t.Fatalf("seed sessions: %v", err)
+	}
+
+	out := runLogsForTest(t, cfg, jobID, logsRunOptions{session: "1203"})
+	if !strings.Contains(out, "Session ID: 1203") {
+		t.Fatalf("expected session id 1203, got %q", out)
+	}
+	if !strings.Contains(out, "Response Text:") {
+		t.Fatalf("expected output mode label: %q", out)
+	}
+	if !strings.Contains(out, "Response for session 2") {
+		t.Fatalf("expected selected session text for id 1203, got: %q", out)
+	}
+	if strings.Contains(out, "Session ID: 101") {
+		t.Fatalf("unexpected aggregate session leaked into session mode: %q", out)
 	}
 }
 
@@ -225,6 +250,41 @@ func seedLogsJobForTest(t *testing.T, dbPath string) (jobID string, sessionOne i
 	}
 
 	return jobID, sessionOne, sessionTwo
+}
+
+func seedLogsJobForTestWithSessionIDs(t *testing.T, dbPath string, sessionIDs ...int64) (jobID string, sessions []int64) {
+	t.Helper()
+	store, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	issueID, err := store.UpsertIssue(ctx, db.IssueUpsert{
+		ProjectName:   "project",
+		Source:        "github",
+		SourceIssueID: "1010",
+		Title:         "logs test",
+		URL:           "https://github.com/autopr/logs-test/issues/1010",
+		State:         "open",
+	})
+	if err != nil {
+		t.Fatalf("upsert issue: %v", err)
+	}
+	jobID, err = store.CreateJob(ctx, issueID, "project", 3)
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+
+	for idx, sessionID := range sessionIDs {
+		if _, err := store.Writer.ExecContext(ctx, `INSERT INTO llm_sessions(id, job_id, step, iteration, llm_provider, status) VALUES(?, ?, ?, ?, ?, 'running')`, sessionID, jobID, "plan", idx+1, "codex"); err != nil {
+			t.Fatalf("insert session %d: %v", sessionID, err)
+		}
+		sessions = append(sessions, sessionID)
+	}
+
+	return jobID, sessions
 }
 
 func completeLogSessionFixtures(t *testing.T, dbPath string, sessionOne int64, sessionTwo int64) error {
