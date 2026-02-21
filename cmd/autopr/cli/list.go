@@ -3,9 +3,8 @@ package cli
 import (
 	"context"
 	"fmt"
-	"time"
-
 	"strings"
+	"time"
 
 	"autopr/internal/cost"
 	"autopr/internal/db"
@@ -75,32 +74,32 @@ func runList(cmd *cobra.Command, args []string) error {
 	paginate := !listAll && (cmd.Flags().Changed("page") || cmd.Flags().Changed("page-size"))
 	page := listPage
 	pageSize := listPageSize
-	snapshot := func() (listSnapshot, error) {
-		return collectListSnapshot(cmd.Context(), store, listProject, state, sortBy, ascending, paginate, page, pageSize, listCost)
+	snapshot := func(ctx context.Context) (listSnapshot, error) {
+		return collectListSnapshot(ctx, store, listProject, state, sortBy, ascending, paginate, page, pageSize, listCost)
 	}
 
-	render := func(_ context.Context, snapshot listSnapshot) error {
-		return renderListSnapshot(context.Background(), jsonOut, listWatch, snapshot, listCost)
+	render := func(ctx context.Context, snapshot listSnapshot, iteration int64) error {
+		return renderListSnapshot(ctx, jsonOut, listWatch, iteration, snapshot, listCost)
 	}
 
 	if listWatch {
 		if listInterval <= 0 {
 			return fmt.Errorf("invalid interval %v; expected > 0", listInterval)
 		}
-		return runWatchLoop(cmd.Context(), listInterval, func(ctx context.Context, _ int64) error {
-			s, err := snapshot()
+		return runWatchLoop(cmd.Context(), listInterval, func(ctx context.Context, iteration int64) error {
+			s, err := snapshot(ctx)
 			if err != nil {
 				return err
 			}
-			return render(ctx, s)
+			return render(ctx, s, iteration)
 		})
 	}
 
-	s, err := snapshot()
+	s, err := snapshot(cmd.Context())
 	if err != nil {
 		return err
 	}
-	return render(cmd.Context(), s)
+	return render(cmd.Context(), s, 0)
 }
 
 type listSnapshot struct {
@@ -158,8 +157,28 @@ func collectListSnapshot(ctx context.Context, store *db.Store, project, state, s
 	}, nil
 }
 
-func renderListSnapshot(_ context.Context, asJSON bool, compactJSON bool, snapshot listSnapshot, showCost bool) error {
+func renderListSnapshot(_ context.Context, asJSON bool, compactJSON bool, iteration int64, snapshot listSnapshot, showCost bool) error {
 	if asJSON {
+		if compactJSON {
+			payload := struct {
+				Jobs      []db.Job `json:"jobs"`
+				Page      int      `json:"page"`
+				PageSize  int      `json:"page_size"`
+				Total     int      `json:"total"`
+				Iteration int64    `json:"iteration"`
+			}{
+				Jobs:      snapshot.Jobs,
+				Page:      snapshot.Page,
+				PageSize:  snapshot.PageSize,
+				Iteration: iteration,
+			}
+			if snapshot.Paginate {
+				payload.Total = snapshot.Total
+			} else {
+				payload.Total = len(snapshot.Jobs)
+			}
+			return writeJSONLine(payload)
+		}
 		if snapshot.Paginate {
 			payload := struct {
 				Jobs     []db.Job `json:"jobs"`
@@ -172,14 +191,8 @@ func renderListSnapshot(_ context.Context, asJSON bool, compactJSON bool, snapsh
 				PageSize: snapshot.PageSize,
 				Total:    snapshot.Total,
 			}
-			if compactJSON {
-				return writeJSONLine(payload)
-			}
 			printJSON(payload)
 			return nil
-		}
-		if compactJSON {
-			return writeJSONLine(snapshot.Jobs)
 		}
 		printJSON(snapshot.Jobs)
 		return nil

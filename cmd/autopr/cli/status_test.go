@@ -423,6 +423,19 @@ func TestRunStatusWatchJSONEmitsMultipleSnapshots(t *testing.T) {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("decode raw snapshot: %v", err)
+		}
+		if _, ok := raw["running"]; !ok {
+			t.Fatalf("missing \"running\" field: %q", line)
+		}
+		if _, ok := raw["pid"]; !ok {
+			t.Fatalf("missing \"pid\" field: %q", line)
+		}
+		if _, ok := raw["job_counts"]; !ok {
+			t.Fatalf("missing \"job_counts\" field: %q", line)
+		}
 		var decoded statusJSONOutput
 		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
 			t.Fatalf("decode snapshot: %v", err)

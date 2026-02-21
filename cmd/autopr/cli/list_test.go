@@ -376,20 +376,37 @@ func TestRunListWatchEmitsMultipleJSONSnapshots(t *testing.T) {
 		t.Fatalf("expected multiple snapshots, got %d lines: %q", len(lines), out)
 	}
 
+	type watchPayload struct {
+		Jobs      []db.Job `json:"jobs"`
+		Iteration int64   `json:"iteration"`
+	}
+	var seenIteration bool
 	hadOne := false
 	hadTwo := false
 	for _, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		var jobs []db.Job
-		if err := json.Unmarshal([]byte(line), &jobs); err != nil {
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("decode raw snapshot line %q: %v", line, err)
+		}
+		if _, ok := raw["jobs"]; !ok {
+			t.Fatalf("missing \"jobs\" field: %q", line)
+		}
+		if _, ok := raw["iteration"]; !ok {
+			t.Fatalf("missing \"iteration\" field: %q", line)
+		} else {
+			seenIteration = true
+		}
+		var payload watchPayload
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
 			t.Fatalf("decode snapshot line %q: %v", line, err)
 		}
-		if len(jobs) == 1 {
+		if len(payload.Jobs) == 1 {
 			hadOne = true
 		}
-		if len(jobs) >= 2 {
+		if len(payload.Jobs) >= 2 {
 			hadTwo = true
 		}
 	}
@@ -398,6 +415,9 @@ func TestRunListWatchEmitsMultipleJSONSnapshots(t *testing.T) {
 	}
 	if !hadTwo {
 		t.Fatalf("expected snapshot with two jobs after mutation, got %d lines", len(lines))
+	}
+	if !seenIteration {
+		t.Fatalf("expected iteration field in snapshots")
 	}
 }
 
