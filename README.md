@@ -6,7 +6,7 @@ for human approval.
 
 ## Demo
 
-https://github.com/user-attachments/assets/60c0d96f-1589-4d54-968d-47e8baa87b1e
+https://github.com/user-attachments/assets/80011a39-dd73-4052-8e2c-a67bc6244880
 
 ## Table of Contents
 
