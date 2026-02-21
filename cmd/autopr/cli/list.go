@@ -168,11 +168,11 @@ func renderListSnapshot(_ context.Context, asJSON bool, compactJSON bool, iterat
 				Iteration int64    `json:"iteration"`
 			}{
 				Jobs:      snapshot.Jobs,
-				Page:      snapshot.Page,
-				PageSize:  snapshot.PageSize,
 				Iteration: iteration,
 			}
 			if snapshot.Paginate {
+				payload.Page = snapshot.Page
+				payload.PageSize = snapshot.PageSize
 				payload.Total = snapshot.Total
 			} else {
 				payload.Total = len(snapshot.Jobs)

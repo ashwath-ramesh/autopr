@@ -543,7 +543,6 @@ func runStatusWithTestConfigResult(t *testing.T, configPath string, ctx context.
 	prevInterval := statusInterval
 	cfgPath = configPath
 	jsonOut = asJSON
-	statusShort = asShort
 	statusWatch = false
 	statusInterval = defaultWatchInterval
 	t.Cleanup(func() {
@@ -562,6 +561,7 @@ func runStatusWithTestConfigResult(t *testing.T, configPath string, ctx context.
 	if err := cmd.ParseFlags(args); err != nil {
 		return "", err
 	}
+	statusShort = asShort
 	cmd.SetContext(ctx)
 	out, err := captureStdoutWithError(t, func() error {
 		return runStatus(cmd, nil)
