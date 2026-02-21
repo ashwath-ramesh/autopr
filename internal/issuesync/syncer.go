@@ -158,16 +158,20 @@ func (s *Syncer) checkPRStatus(ctx context.Context) {
 		}
 
 		var (
-			prURL      string
-			lookupErr  error
-			branchName = strings.TrimSpace(job.BranchName)
+			prURL        string
+			lookupErr    error
+			branchName   = strings.TrimSpace(job.BranchName)
+			forkHeadName = branchName
 		)
 		switch {
 		case proj.GitHub != nil:
 			if s.cfg.Tokens.GitHub == "" || branchName == "" {
 				continue
 			}
-			prURL, lookupErr = s.findGitHubPRByBranch(ctx, s.cfg.Tokens.GitHub, proj.GitHub.Owner, proj.GitHub.Repo, branchName, "all")
+			if strings.TrimSpace(proj.GitHub.ForkOwner) != "" {
+				forkHeadName = proj.GitHub.GitHubForkHead(branchName)
+			}
+			prURL, lookupErr = s.findGitHubPRByBranch(ctx, s.cfg.Tokens.GitHub, proj.GitHub.Owner, proj.GitHub.Repo, forkHeadName, "all")
 		case proj.GitLab != nil:
 			if s.cfg.Tokens.GitLab == "" || branchName == "" {
 				continue

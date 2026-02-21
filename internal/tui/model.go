@@ -408,8 +408,18 @@ func (m Model) executeApprove() tea.Msg {
 		return actionResultMsg{action: "approve", err: fmt.Errorf("rebase before push: %w", err)}
 	}
 
+	pushRemote := "origin"
+	pushHead := job.BranchName
+	if proj.GitHub != nil {
+		var err error
+		pushRemote, pushHead, err = pipeline.ResolveGitHubPushTarget(ctx, proj, job.BranchName, job.WorktreePath, m.cfg.Tokens.GitHub)
+		if err != nil {
+			return actionResultMsg{action: "approve", err: fmt.Errorf("resolve push target: %w", err)}
+		}
+	}
+
 	// Push branch to remote before creating PR (captured to avoid corrupting TUI).
-	if err := git.PushBranchWithLeaseCaptured(ctx, job.WorktreePath, job.BranchName); err != nil {
+	if err := git.PushBranchWithLeaseCapturedToRemoteWithToken(ctx, job.WorktreePath, pushRemote, job.BranchName, m.cfg.Tokens.GitHub); err != nil {
 		return actionResultMsg{action: "approve", err: fmt.Errorf("push branch: %w", err)}
 	}
 
@@ -418,7 +428,7 @@ func (m Model) executeApprove() tea.Msg {
 
 		prTitle, prBody := buildTUIPRContent(job, issue)
 		var prErr error
-		prURL, prErr = createTUIPR(ctx, m.cfg, proj, *job, prTitle, prBody, m.confirmDraft)
+		prURL, prErr = createTUIPR(ctx, m.cfg, proj, *job, pushHead, prTitle, prBody, m.confirmDraft)
 		if prErr != nil {
 			return actionResultMsg{action: "approve", err: fmt.Errorf("create PR: %w", prErr)}
 		}
@@ -563,7 +573,7 @@ func buildTUIPRContent(job *db.Job, issue db.Issue) (string, string) {
 }
 
 // createTUIPR creates a GitHub PR or GitLab MR based on project config.
-func createTUIPR(ctx context.Context, cfg *config.Config, proj *config.ProjectConfig, job db.Job, title, body string, draft bool) (string, error) {
+func createTUIPR(ctx context.Context, cfg *config.Config, proj *config.ProjectConfig, job db.Job, head, title, body string, draft bool) (string, error) {
 	if job.BranchName == "" {
 		return "", fmt.Errorf("job has no branch name — was the branch pushed?")
 	}
@@ -573,7 +583,7 @@ func createTUIPR(ctx context.Context, cfg *config.Config, proj *config.ProjectCo
 			return "", fmt.Errorf("GITHUB_TOKEN required to create PR")
 		}
 		return git.CreateGitHubPR(ctx, cfg.Tokens.GitHub, proj.GitHub.Owner, proj.GitHub.Repo,
-			job.BranchName, proj.BaseBranch, title, body, draft)
+			head, proj.BaseBranch, title, body, draft)
 	case proj.GitLab != nil:
 		if cfg.Tokens.GitLab == "" {
 			return "", fmt.Errorf("GITLAB_TOKEN required to create MR")

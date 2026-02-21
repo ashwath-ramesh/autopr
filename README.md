@@ -175,8 +175,15 @@ base_branch = "main"
   [projects.github]
   owner = "org"
   repo = "repo"
+  # fork_owner = "my-user"      # set to push branches to your fork and open cross-repo PRs
+  #                              leave unset to keep direct-push flow
   # include_labels = ["autopr"] # optional: ANY match; empty means no include gate
 ```
+
+When `fork_owner` is set, AutoPR keeps `repo_url` as the upstream repository:
+clone and base ref fetches still use upstream, but push targets `fork_owner/repo`
+and PRs are opened as `<fork_owner>:<branch>` against the upstream repo.
+`fork_owner` must match an already-created fork of that repository.
 
 ### 4.1 File Locations
 
@@ -210,6 +217,9 @@ log_file = "/custom/path/autopr.log"
 > **Note:** `GITHUB_TOKEN` requires a fine-grained PAT with `Contents: Read and write` + `Issues: Read-only`
 > scoped to the target repo. With read-only contents access, the daemon will work end-to-end but
 > branch push will fail — you'll need to push branches manually after approving jobs.
+>
+> For fork-based PRs (`fork_owner` set), branch push is still sent to `https://github.com/<fork_owner>/<repo>.git`
+> while PRs are opened against the upstream repo. Keep `fork_owner` unset for direct-push behavior.
 
 ### 4.3 Notifications
 

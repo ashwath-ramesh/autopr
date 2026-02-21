@@ -27,18 +27,26 @@ var errJobCancelled = errors.New("job cancelled")
 
 // Runner orchestrates the full pipeline for a job.
 type Runner struct {
-	store       *db.Store
-	provider    llm.Provider
-	cfg         *config.Config
-	cloneForJob func(ctx context.Context, repoURL, token, destPath, branchName, baseBranch string) error
+	store                       *db.Store
+	provider                    llm.Provider
+	cfg                         *config.Config
+	cloneForJob                 func(ctx context.Context, repoURL, token, destPath, branchName, baseBranch string) error
+	prepareGitHubPushTarget     func(ctx context.Context, projectCfg *config.ProjectConfig, branchName, worktreePath, token string) (string, string, error)
+	pushBranchWithLeaseToRemote func(ctx context.Context, dir, remoteName, branchName string) error
+	createPRForProjectFn        func(ctx context.Context, cfg *config.Config, proj *config.ProjectConfig, job db.Job, head, title, body string) (string, error)
 }
 
 func New(store *db.Store, provider llm.Provider, cfg *config.Config) *Runner {
 	return &Runner{
-		store:       store,
-		provider:    provider,
-		cfg:         cfg,
-		cloneForJob: git.CloneForJob,
+		store:                   store,
+		provider:                provider,
+		cfg:                     cfg,
+		cloneForJob:             git.CloneForJob,
+		prepareGitHubPushTarget: ResolveGitHubPushTarget,
+		pushBranchWithLeaseToRemote: func(ctx context.Context, dir, remoteName, branchName string) error {
+			return git.PushBranchWithLeaseToRemoteWithToken(ctx, dir, remoteName, branchName, cfg.Tokens.GitHub)
+		},
+		createPRForProjectFn: createPRForProject,
 	}
 }
 
@@ -356,6 +364,39 @@ func (r *Runner) onJobCancelled(jobID string) error {
 	return nil
 }
 
+// ResolveGitHubPushTarget chooses the push remote and PR head for a GitHub project.
+//
+// If github.fork_owner is set, pushes go to the "fork" remote and PR head uses
+// "fork_owner:branch". Otherwise pushes go to origin and PR head is branch.
+func ResolveGitHubPushTarget(ctx context.Context, projectCfg *config.ProjectConfig, branchName, worktreePath, token string) (string, string, error) {
+	branchName = strings.TrimSpace(branchName)
+	if projectCfg == nil || projectCfg.GitHub == nil || strings.TrimSpace(projectCfg.GitHub.ForkOwner) == "" {
+		return "origin", branchName, nil
+	}
+
+	forkOwner := strings.TrimSpace(projectCfg.GitHub.ForkOwner)
+	if forkOwner == "" {
+		return "", "", fmt.Errorf("project %q github.fork_owner cannot be blank", projectCfg.Name)
+	}
+	if strings.TrimSpace(token) == "" {
+		return "", "", fmt.Errorf("GITHUB_TOKEN required when github.fork_owner is set")
+	}
+
+	forkRemote := projectCfg.GitHub.GitHubForkRemote()
+	if forkRemote == "" {
+		return "", "", fmt.Errorf("project %q github.fork_owner could not resolve fork remote", projectCfg.Name)
+	}
+
+	if err := git.EnsureRemote(ctx, worktreePath, "fork", forkRemote); err != nil {
+		return "", "", fmt.Errorf("ensure fork remote: %w", err)
+	}
+	if err := git.CheckGitRemoteReachable(ctx, forkRemote, token); err != nil {
+		return "", "", fmt.Errorf("fork remote unreachable: %w", err)
+	}
+
+	return "fork", projectCfg.GitHub.GitHubForkHead(branchName), nil
+}
+
 func (r *Runner) maybeAutoPR(ctx context.Context, jobID string, issue db.Issue, projectCfg *config.ProjectConfig) error {
 	job, err := r.store.GetJob(ctx, jobID)
 	if err != nil {
@@ -370,8 +411,18 @@ func (r *Runner) maybeAutoPR(ctx context.Context, jobID string, issue db.Issue, 
 		return fmt.Errorf("rebase before auto-PR push: %w", err)
 	}
 
+	remoteName := "origin"
+	head := job.BranchName
+	if projectCfg.GitHub != nil {
+		var err error
+		remoteName, head, err = r.prepareGitHubPushTarget(ctx, projectCfg, job.BranchName, job.WorktreePath, r.cfg.Tokens.GitHub)
+		if err != nil {
+			return fmt.Errorf("resolve auto-PR push target: %w", err)
+		}
+	}
+
 	// Push branch to remote before creating PR.
-	if err := git.PushBranchWithLease(ctx, job.WorktreePath, job.BranchName); err != nil {
+	if err := r.pushBranchWithLeaseToRemote(ctx, job.WorktreePath, remoteName, job.BranchName); err != nil {
 		return fmt.Errorf("push branch for auto-PR: %w", err)
 	}
 
@@ -379,7 +430,7 @@ func (r *Runner) maybeAutoPR(ctx context.Context, jobID string, issue db.Issue, 
 
 	prTitle, prBody := BuildPRContent(ctx, r.store, job, issue)
 
-	prURL, err := createPRForProject(ctx, r.cfg, projectCfg, job, prTitle, prBody)
+	prURL, err := r.createPRForProjectFn(ctx, r.cfg, projectCfg, job, head, prTitle, prBody)
 	if err != nil {
 		slog.Error("auto-PR creation failed", "job", jobID, "err", err)
 		return fmt.Errorf("auto-create PR: %w", err)
@@ -406,7 +457,7 @@ func (r *Runner) maybeAutoPR(ctx context.Context, jobID string, issue db.Issue, 
 }
 
 // createPRForProject creates a GitHub PR or GitLab MR based on project config.
-func createPRForProject(ctx context.Context, cfg *config.Config, proj *config.ProjectConfig, job db.Job, title, body string) (string, error) {
+func createPRForProject(ctx context.Context, cfg *config.Config, proj *config.ProjectConfig, job db.Job, head, title, body string) (string, error) {
 	if job.BranchName == "" {
 		return "", fmt.Errorf("job has no branch name — was the branch pushed?")
 	}
@@ -417,7 +468,7 @@ func createPRForProject(ctx context.Context, cfg *config.Config, proj *config.Pr
 			return "", fmt.Errorf("GITHUB_TOKEN required to create PR")
 		}
 		return git.CreateGitHubPR(ctx, cfg.Tokens.GitHub, proj.GitHub.Owner, proj.GitHub.Repo,
-			job.BranchName, proj.BaseBranch, title, body, false)
+			head, proj.BaseBranch, title, body, false)
 
 	case proj.GitLab != nil:
 		if cfg.Tokens.GitLab == "" {

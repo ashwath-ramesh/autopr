@@ -14,8 +14,24 @@ import (
 	"autopr/internal/httputil"
 )
 
+var githubAPIBase = "https://api.github.com"
+
+func normalizeGitHubHead(owner, head string) string {
+	head = strings.TrimSpace(head)
+	if strings.Contains(head, ":") {
+		return head
+	}
+	if owner == "" {
+		return head
+	}
+	return fmt.Sprintf("%s:%s", strings.TrimSpace(owner), head)
+}
+
 // CreateGitHubPR creates a pull request on GitHub and returns its HTML URL.
+// head may be a branch name ("feature/abc") or an owner-qualified ref
+// ("alice:feature/abc").
 func CreateGitHubPR(ctx context.Context, token, owner, repo, head, base, title, body string, draft bool) (string, error) {
+	head = normalizeGitHubHead(owner, head)
 	payload := map[string]any{
 		"title": title,
 		"head":  head,
@@ -28,7 +44,7 @@ func CreateGitHubPR(ctx context.Context, token, owner, repo, head, base, title, 
 		return "", fmt.Errorf("marshal PR payload: %w", err)
 	}
 
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls", owner, repo)
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls", githubAPIBase, owner, repo)
 
 	resp, err := httputil.Do(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(buf))
@@ -78,6 +94,7 @@ func CreateGitHubPR(ctx context.Context, token, owner, repo, head, base, title, 
 
 // findGitHubPR looks up an existing open PR for the given head branch.
 func findGitHubPR(ctx context.Context, token, owner, repo, head string) (string, error) {
+	head = normalizeGitHubHead(owner, head)
 	return FindGitHubPRByBranch(ctx, token, owner, repo, head, "open")
 }
 
@@ -87,8 +104,9 @@ func FindGitHubPRByBranch(ctx context.Context, token, owner, repo, head, state s
 	if state == "" {
 		state = "open"
 	}
-	headRef := fmt.Sprintf("%s:%s", owner, head)
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?head=%s&state=%s",
+	headRef := normalizeGitHubHead(owner, head)
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls?head=%s&state=%s",
+		githubAPIBase,
 		owner, repo, url.QueryEscape(headRef), url.QueryEscape(state))
 
 	resp, err := httputil.Do(ctx, func() (*http.Request, error) {
@@ -253,7 +271,7 @@ func MergeGitHubPR(ctx context.Context, token, prURL, method string) error {
 	}
 	owner, repo := parts[0], parts[1]
 
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s/merge", owner, repo, prNumber)
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%s/merge", githubAPIBase, owner, repo, prNumber)
 	payload := map[string]any{"merge_method": method}
 	payloadBody, err := json.Marshal(payload)
 	if err != nil {
@@ -395,7 +413,7 @@ func CheckGitHubPRStatus(ctx context.Context, token, prURL string) (PRMergeStatu
 	}
 	owner, repo := parts[0], parts[1]
 
-	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls/%s", owner, repo, prNumber)
+	apiURL := fmt.Sprintf("%s/repos/%s/%s/pulls/%s", githubAPIBase, owner, repo, prNumber)
 
 	resp, err := httputil.Do(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
@@ -507,7 +525,7 @@ type CheckRunStatus struct {
 // GetGitHubCheckRunStatus fetches the check-run status for a commit ref,
 // paginating through all pages to handle repos with >100 check-runs.
 func GetGitHubCheckRunStatus(ctx context.Context, token, owner, repo, ref string) (CheckRunStatus, error) {
-	baseURL := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/check-runs", owner, repo, url.PathEscape(ref))
+	baseURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", githubAPIBase, owner, repo, url.PathEscape(ref))
 
 	var status CheckRunStatus
 	page := 1

@@ -92,6 +92,82 @@ test_cmd = "make test"
 	}
 }
 
+func TestLoadParsesGitHubForkOwner(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "autopr.toml")
+
+	content := `
+[[projects]]
+name = "test"
+repo_url = "https://github.com/org/repo.git"
+test_cmd = "make test"
+
+  [projects.github]
+  owner = "org"
+  repo = "repo"
+  fork_owner = " fork-user "
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
+	p, ok := cfg.ProjectByName("test")
+	if !ok || p.GitHub == nil {
+		t.Fatalf("expected github project")
+	}
+	if p.GitHub.ForkOwner != "fork-user" {
+		t.Fatalf("expected fork_owner trimmed to fork-user, got %q", p.GitHub.ForkOwner)
+	}
+}
+
+func TestLoadFailsForBlankGitHubForkOwner(t *testing.T) {
+	tmp := t.TempDir()
+	cfgPath := filepath.Join(tmp, "autopr.toml")
+
+	content := `
+[[projects]]
+name = "test"
+repo_url = "https://github.com/org/repo.git"
+test_cmd = "make test"
+
+  [projects.github]
+  owner = "org"
+  repo = "repo"
+  fork_owner = "   "
+`
+	if err := os.WriteFile(cfgPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := Load(cfgPath)
+	if err == nil {
+		t.Fatalf("expected error for blank fork_owner")
+	}
+	if !strings.Contains(err.Error(), "github.fork_owner") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProjectGitHubForkHeadAndRemote(t *testing.T) {
+	t.Parallel()
+
+	p := &ProjectGitHub{
+		ForkOwner: " fork-user ",
+		Repo:      " repo ",
+	}
+	if got := p.GitHubForkHead("feature/branch"); got != "fork-user:feature/branch" {
+		t.Fatalf("unexpected head: %q", got)
+	}
+	if got := p.GitHubForkRemote(); got != "https://github.com/fork-user/repo.git" {
+		t.Fatalf("unexpected remote: %q", got)
+	}
+}
+
 func TestLoadFailsForNoProjects(t *testing.T) {
 	t.Parallel()
 	tmp := t.TempDir()

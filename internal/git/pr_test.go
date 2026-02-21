@@ -8,8 +8,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
+
+var githubAPIBaseMu sync.Mutex
+
+func withGitHubAPIBase(t *testing.T, base string, fn func()) {
+	t.Helper()
+	githubAPIBaseMu.Lock()
+	orig := githubAPIBase
+	githubAPIBase = base
+	t.Cleanup(func() {
+		githubAPIBase = orig
+		githubAPIBaseMu.Unlock()
+	})
+	fn()
+}
 
 func TestCreateGitLabMR_409ReturnsExisting(t *testing.T) {
 	t.Parallel()
@@ -39,6 +54,89 @@ func TestCreateGitLabMR_409ReturnsExisting(t *testing.T) {
 	if got != "https://gitlab.com/org/repo/-/merge_requests/42" {
 		t.Fatalf("want existing MR URL, got %q", got)
 	}
+}
+
+func TestCreateGitHubPR_UsesForkQualifiedHeadWhenProvided(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || !strings.Contains(r.URL.Path, "/repos/acme/repo/pulls") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"html_url":"https://github.com/acme/repo/pull/12"}`)
+	}))
+	defer srv.Close()
+
+	withGitHubAPIBase(t, srv.URL, func() {
+		got, err := CreateGitHubPR(context.Background(), "tok", "acme", "repo", "feature/forked", "main", "title", "body", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "https://github.com/acme/repo/pull/12" {
+			t.Fatalf("want PR URL, got %q", got)
+		}
+		if gotBody["head"] != "acme:feature/forked" {
+			t.Fatalf("expected head acme:feature/forked, got %q", gotBody["head"])
+		}
+	})
+}
+
+func TestFindGitHubPRByBranch_PassesBranchAsHeadWhenAlreadyQualified(t *testing.T) {
+	var gotHead string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/repos/acme/repo/pulls") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		gotHead = r.URL.Query().Get("head")
+		gotState := r.URL.Query().Get("state")
+		if gotState != "all" {
+			t.Fatalf("expected state=all, got %q", gotState)
+		}
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[{"html_url":"https://github.com/acme/repo/pull/14"}]`)
+	}))
+	defer srv.Close()
+
+	withGitHubAPIBase(t, srv.URL, func() {
+		got, err := FindGitHubPRByBranch(context.Background(), "tok", "acme", "repo", "alice:feature/forked", "all")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "https://github.com/acme/repo/pull/14" {
+			t.Fatalf("want PR URL, got %q", got)
+		}
+		if gotHead != "alice:feature/forked" {
+			t.Fatalf("expected query head alice:feature/forked, got %q", gotHead)
+		}
+	})
+}
+
+func TestFindGitHubPRByBranch_PrefixesOwnerForPlainHead(t *testing.T) {
+	var gotHead string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/repos/acme/repo/pulls") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		gotHead = r.URL.Query().Get("head")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `[{"html_url":"https://github.com/acme/repo/pull/15"}]`)
+	}))
+	defer srv.Close()
+
+	withGitHubAPIBase(t, srv.URL, func() {
+		if _, err := FindGitHubPRByBranch(context.Background(), "tok", "acme", "repo", "feature/forked", "open"); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotHead != "acme:feature/forked" {
+			t.Fatalf("expected query head acme:feature/forked, got %q", gotHead)
+		}
+	})
 }
 
 func TestCreateGitLabMR_409NoExistingReturnsError(t *testing.T) {

@@ -259,6 +259,8 @@ base_branch = "main"
   [projects.github]
   owner = "org"
   repo = "repo"
+  # fork_owner = "my-user"   # set to push to your fork and create PRs from my-user:<branch>
+  #                             set unset to keep existing direct-push behavior
   # include_labels defaults to ["autopr"] -- label issues "autopr" to process them
   # include_labels = ["bug"]    # custom: only process issues labeled "bug"
   # include_labels = []          # opt-out: process ALL open issues
