@@ -44,7 +44,7 @@ func New(store *db.Store, provider llm.Provider, cfg *config.Config) *Runner {
 		cloneForJob:             git.CloneForJob,
 		prepareGitHubPushTarget: ResolveGitHubPushTarget,
 		pushBranchWithLeaseToRemote: func(ctx context.Context, dir, remoteName, branchName string) error {
-			return git.PushBranchWithLeaseToRemote(ctx, dir, remoteName, branchName)
+			return git.PushBranchWithLeaseToRemoteWithToken(ctx, dir, remoteName, branchName, cfg.Tokens.GitHub)
 		},
 		createPRForProjectFn: createPRForProject,
 	}

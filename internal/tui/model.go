@@ -419,7 +419,7 @@ func (m Model) executeApprove() tea.Msg {
 	}
 
 	// Push branch to remote before creating PR (captured to avoid corrupting TUI).
-	if err := git.PushBranchWithLeaseCapturedToRemote(ctx, job.WorktreePath, pushRemote, job.BranchName); err != nil {
+	if err := git.PushBranchWithLeaseCapturedToRemoteWithToken(ctx, job.WorktreePath, pushRemote, job.BranchName, m.cfg.Tokens.GitHub); err != nil {
 		return actionResultMsg{action: "approve", err: fmt.Errorf("push branch: %w", err)}
 	}
 

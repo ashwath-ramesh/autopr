@@ -77,7 +77,7 @@ func runApprove(cmd *cobra.Command, args []string) error {
 	}
 
 	// Push branch to remote before creating PR.
-	if err := git.PushBranchWithLeaseToRemote(cmd.Context(), job.WorktreePath, pushRemote, job.BranchName); err != nil {
+	if err := git.PushBranchWithLeaseToRemoteWithToken(cmd.Context(), job.WorktreePath, pushRemote, job.BranchName, cfg.Tokens.GitHub); err != nil {
 		return fmt.Errorf("push branch: %w", err)
 	}
 

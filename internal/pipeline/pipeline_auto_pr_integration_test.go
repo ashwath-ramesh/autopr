@@ -98,6 +98,7 @@ func TestMaybeAutoPR_WithForkOwnerPushesToForkRemote(t *testing.T) {
 		return "https://github.com/acme/repo/pull/123", nil
 	}
 
+	projectCfg := &cfg.Projects[0]
 	if err := runner.maybeAutoPR(ctx, jobID, db.Issue{
 		ProjectName:   "myproject",
 		Source:        "github",
@@ -105,7 +106,7 @@ func TestMaybeAutoPR_WithForkOwnerPushesToForkRemote(t *testing.T) {
 		Title:         "forked PR auto PR",
 		URL:           "https://github.com/acme/repo/issues/123",
 		State:         "open",
-	}, &cfg.Projects[0]); err != nil {
+	}, projectCfg); err != nil {
 		t.Fatalf("auto PR: %v", err)
 	}
 
@@ -229,6 +230,7 @@ func TestMaybeAutoPR_ForkOwner_UnreachableRemoteValidationError(t *testing.T) {
 		return "fork", projectCfg.GitHub.GitHubForkHead(branchName), nil
 	}
 
+	projectCfg := &cfg.Projects[0]
 	err = runner.maybeAutoPR(ctx, jobID, db.Issue{
 		ProjectName:   "myproject",
 		Source:        "github",
@@ -236,7 +238,7 @@ func TestMaybeAutoPR_ForkOwner_UnreachableRemoteValidationError(t *testing.T) {
 		Title:         "unreachable fork",
 		URL:           "https://github.com/acme/repo/issues/456",
 		State:         "open",
-	}, &cfg.Projects[0])
+	}, projectCfg)
 	if err == nil {
 		t.Fatal("expected error")
 	}

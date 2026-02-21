@@ -172,6 +172,13 @@ func TestCheckGitRemoteReachable(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
+	emptyRemote := filepath.Join(tmp, "empty.git")
+	runGitCmd(t, "", "init", "--bare", emptyRemote)
+
+	if err := CheckGitRemoteReachable(ctx, emptyRemote, ""); err != nil {
+		t.Fatalf("expected empty bare remote to be reachable: %v", err)
+	}
+
 	seed := filepath.Join(tmp, "seed")
 	runGitCmd(t, "", "init", seed)
 	runGitCmd(t, seed, "config", "user.email", "test@example.com")
