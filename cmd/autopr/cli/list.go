@@ -51,7 +51,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(jobs) == 0 {
-		fmt.Println("No jobs found.")
+		fmt.Println("No jobs found. Run 'ap start' to begin processing issues.")
 		return nil
 	}
 
