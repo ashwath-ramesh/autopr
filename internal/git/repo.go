@@ -136,17 +136,27 @@ func EnsureRemote(ctx context.Context, dir, remoteName, remoteURL string) error 
 		return fmt.Errorf("remote URL is empty")
 	}
 
-	existing, err := runGitOutput(ctx, dir, "remote", "get-url", remoteName)
+	existingRaw, errOut, err := runGitOutputAndErr(ctx, dir, "remote", "get-url", remoteName)
 	if err == nil {
-		if strings.TrimSpace(existing) == remoteURL {
+		if strings.TrimSpace(existingRaw) == remoteURL {
 			return nil
 		}
-		return fmt.Errorf("remote %q exists with different URL %q", remoteName, strings.TrimSpace(existing))
+		return fmt.Errorf("remote %q exists with different URL %q", remoteName, strings.TrimSpace(existingRaw))
 	}
-	if !strings.Contains(err.Error(), "No such remote") {
-		return fmt.Errorf("get remote %q url: %w", remoteName, err)
+
+	errText := strings.ToLower(strings.TrimSpace(errOut))
+	if errText == "" {
+		errText = strings.ToLower(err.Error())
+	}
+	if !isMissingGitRemoteError(errText) {
+		return fmt.Errorf("get remote %q url: %w: %s", remoteName, err, errText)
 	}
 	return runGit(ctx, dir, "remote", "add", remoteName, remoteURL)
+}
+
+func isMissingGitRemoteError(errText string) bool {
+	return strings.Contains(errText, "no such remote") ||
+		strings.Contains(errText, "did not resolve to a git repository")
 }
 
 // CheckGitRemoteReachable checks that the given remote URL responds to ls-remote.

@@ -172,8 +172,22 @@ func TestCheckGitRemoteReachable(t *testing.T) {
 	ctx := context.Background()
 	tmp := t.TempDir()
 
+	seed := filepath.Join(tmp, "seed")
+	runGitCmd(t, "", "init", seed)
+	runGitCmd(t, seed, "config", "user.email", "test@example.com")
+	runGitCmd(t, seed, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write seed file: %v", err)
+	}
+	runGitCmd(t, seed, "add", "README.md")
+	runGitCmd(t, seed, "commit", "-m", "init")
+	runGitCmd(t, seed, "branch", "-M", "main")
+
 	remote := filepath.Join(tmp, "remote.git")
 	runGitCmd(t, "", "init", "--bare", remote)
+	runGitCmd(t, seed, "remote", "add", "origin", remote)
+	runGitCmd(t, seed, "push", "origin", "main")
+
 	if err := CheckGitRemoteReachable(ctx, remote, ""); err != nil {
 		t.Fatalf("expected reachable local remote: %v", err)
 	}

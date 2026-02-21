@@ -77,7 +77,7 @@ func TestCheckPRStatus_BranchFallbackUsesForkQualifiedHead(t *testing.T) {
 	store := openTestStore(t)
 	defer store.Close()
 
-	jobID := createSyncTestJob(t, ctx, store, "project-gh-fork", "fallback-fork", "ready", "autopr/branch-fork", "")
+	_ = createSyncTestJob(t, ctx, store, "project-gh-fork", "fallback-fork", "ready", "autopr/branch-fork", "")
 
 	cfg := &config.Config{
 		Tokens: config.TokensConfig{GitHub: "token"},

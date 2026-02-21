@@ -157,8 +157,8 @@ func TestProjectGitHubForkHeadAndRemote(t *testing.T) {
 	t.Parallel()
 
 	p := &ProjectGitHub{
-		ForkOwner: "fork-user",
-		Repo:      "repo",
+		ForkOwner: " fork-user ",
+		Repo:      " repo ",
 	}
 	if got := p.GitHubForkHead("feature/branch"); got != "fork-user:feature/branch" {
 		t.Fatalf("unexpected head: %q", got)

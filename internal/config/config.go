@@ -171,10 +171,14 @@ type ProjectGitHub struct {
 
 func (github *ProjectGitHub) GitHubForkHead(branch string) string {
 	branch = strings.TrimSpace(branch)
-	if github == nil || github.ForkOwner == "" {
+	if github == nil {
 		return branch
 	}
-	return fmt.Sprintf("%s:%s", github.ForkOwner, branch)
+	forkOwner := strings.TrimSpace(github.ForkOwner)
+	if forkOwner == "" {
+		return branch
+	}
+	return fmt.Sprintf("%s:%s", forkOwner, branch)
 }
 
 func (github *ProjectGitHub) GitHubForkRemote() string {
