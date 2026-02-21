@@ -286,7 +286,7 @@ ap notify --test --json
 | `ap stop` | Gracefully stop the daemon |
 | `ap status` | Show daemon status and job counts |
 | `ap status --short` | Print one-line status summary |
-| `ap list [--project X] [--state Y]` | List jobs with optional filters |
+| `ap list [--project X] [--state all|active|merged|queued|planning|implementing|reviewing|testing|ready|rebasing|resolving|resolving_conflicts|awaiting_checks|approved|rejected|failed|cancelled] [--sort updated_at|created_at|state|project] [--asc|--desc]` | List jobs with optional filters |
 | `ap issues [--project X] [--eligible|--ineligible]` | List synced issues and eligibility |
 | `ap logs <job-id>` | Show LLM output, artifacts, and tokens |
 | `ap approve <job-id>` | Approve a job and create PR |
